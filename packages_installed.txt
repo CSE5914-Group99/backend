@@ -1,0 +1,26 @@
+# FastAPI and Web Framework
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+python-multipart
+
+# HTTP Client
+httpx
+
+# Testing
+pytest
+pytest-asyncio
+
+# LangGraph and LangChain for AI agent
+langgraph
+langchain
+langchain-core
+langchain-openai
+langchain-community
+langchain-tavily
+python-dotenv
+
+# Web Scraping
+beautifulsoup4
+lxml
