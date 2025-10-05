@@ -7,6 +7,7 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import create_react_agent
 from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage
 
 # Import tools
 from agents.tools.internet_search import basic_tavily_search
@@ -64,33 +65,32 @@ def check_cache(state: ClassGradingState) -> ClassGradingState:
     # For now, always return no cache
     return {
         "cached": False,
-        "class_info": None
+        "class_score": None
     }
 
 # Node 2: Score class agent (calls tools)
 def score_class_agent(state: ClassGradingState) -> ClassGradingState:
     """Agent that calls various tools to score the class"""
     messages = state["messages"]
-    response = agent.invoke(messages, debug=False)
+    response = agent.invoke({"messages": messages}, debug=False)
     return {
         "messages": response["messages"],
-        "class_info": response['structured_response']
+        "class_score": response['structured_response']
     }
 
 # Node 3: Cache class score and relevant course info
-def cache_class_info(state: ClassGradingState) -> ClassGradingState:
+def cache_class_score(state: ClassGradingState) -> ClassGradingState:
     """Cache the class scoring information and relevant course info"""
     # TODO: Implement actual caching logic
-    # Extract class info from messages and cache it
+    # For now, just mark as cached without modifying the class_score
     return {
-        "cached": True,
-        "class_info": {"cached_at": "now"}  # Placeholder
+        "cached": True
     }
 
 # Conditional edge, Route based on cache hit/miss
 def route_after_cache_check(state: ClassGradingState) -> Literal["score_class_agent", "end"]:
     """Route to agent if no cache, otherwise end"""
-    if state.get("cached") and state.get("class_info"):
+    if state.get("cached") and state.get("class_score"):
         return "end"
     return "score_class_agent"
 
@@ -102,7 +102,7 @@ def create_class_grading_graph():
     # Add nodes
     graph.add_node("check_cache", check_cache)
     graph.add_node("score_class_agent", score_class_agent)
-    graph.add_node("cache_class_info", cache_class_info)
+    graph.add_node("cache_class_score", cache_class_score)
 
     # Add edges
     graph.add_edge(START, "check_cache")
@@ -114,8 +114,8 @@ def create_class_grading_graph():
             "end": END
         }
     )
-    graph.add_edge("score_class_agent", "cache_class_info")
-    graph.add_edge("cache_class_info", END)
+    graph.add_edge("score_class_agent", "cache_class_score")
+    graph.add_edge("cache_class_score", END)
 
     return graph.compile()
 
@@ -124,18 +124,17 @@ class_grading_graph = create_class_grading_graph()
 
 if __name__ == "__main__":
     # run with python -m agents.class_grading_agent
-    # test just the agent itself, not graph, graph not working yet.
-    response = agent.invoke({"messages": [{"role": "user", "content": "Just lookup the CSE 2331 class at OSU and tell me what you think"}]}, debug=False)
-    print(response['structured_response'])
-
+    test_messages = [HumanMessage(content="Just lookup the CSE 2331 class at OSU and tell me what you think")]
 
     # Test the graph
-    #initial_state = {
-    #    "messages": [{"role": "user", "content": "Just lookup the CSE 2331 class at OSU and tell me what you think"}],
-    #    "class_name": "CSE 2331",
-    #    "class_info": None,
-    #    "cached": False
-    #}
+    initial_state = {
+        "messages": test_messages,
+        "class_name": "CSE 2331",
+        "class_score": None,
+        "cached": False
+    }
 
-    #result = class_grading_graph.invoke(initial_state)
-    #print(result)
+    result = class_grading_graph.invoke(initial_state)
+    # Print as JSON
+    import json
+    print(json.dumps(result["class_score"].model_dump(), indent=2))
