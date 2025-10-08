@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from routers import user_router, product_router
 import uvicorn
+from config import settings
 
 app = FastAPI(
     title="Microservices API",
@@ -29,4 +30,4 @@ app.include_router(user_router)
 app.include_router(product_router)
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host=settings.api_host, port=settings.api_port)
