@@ -80,6 +80,36 @@ async def get_user(user_id: int):
 
     return User(id=row[0], username=row[1], email=row[2], created_at=row[3])
 
+@user_router.patch("/{user_id}", response_model=User)
+async def update_user(user_id: int, user: UserCreate):
+    conn = _conn()
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM users WHERE id=?", (user_id,))
+    if not cur.fetchone():
+        conn.close()
+        raise HTTPException(status_code=404, detail="User not found")
+
+    cur.execute(
+        "UPDATE users SET username=?, email=?, password=? WHERE id=?",
+        (user.username, user.email, bcrypt.hash(user.password), user_id)
+    )
+    conn.commit()
+    conn.close()
+    return await get_user(user_id)
+
+@user_router.delete("/{user_id}")
+async def delete_user(user_id: int):
+    conn = _conn()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM users WHERE id=?", (user_id,))
+    deleted = cur.rowcount
+    conn.commit()
+    conn.close()
+
+    if not deleted:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"message": f"User {user_id} deleted successfully"}
+
 # Product microservice router
 product_router = APIRouter(prefix="/products", tags=["products"])
 
