@@ -3,11 +3,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from routers import user_router, product_router
 import uvicorn
 from config import settings
+from db import lifespan 
 
 app = FastAPI(
     title="Microservices API",
     description="A simple FastAPI microservices setup",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 app.add_middleware(

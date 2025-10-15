@@ -1,0 +1,8 @@
+runtime: python312
+entrypoint: gunicorn -w 2 -k uvicorn.workers.UvicornWorker -b :$PORT main:app
+automatic_scaling:
+  min_instances: 0
+  max_instances: 2
+env_variables:
+  MONGODB_URI: "mongodb+srv://g99:g99666666@clusterg99.1d84430.mongodb.net/?retryWrites=true&w=majority&appName=ClusterG99"
+  MONGODB_DB: "ClusterG99"
