@@ -32,10 +32,6 @@ class ClassScore(BaseModel):
     project_intensity: int = Field(0, ge=0, le=100, description="amount and difficulty of projects")
     pace: int = Field(50, ge=0, le=100, description="pace of class")
 
-    # Instructor/Support (optional vibes)
-    instructor_vibe: Optional[int] = Field(None, ge=0, le=100, description="quality of the instructor")
-    support_vibe: Optional[int] = Field(None, ge=0, le=100, description="quality of the class support (ie. tutoring availiablity, etc.)")
-
     # Evidence
     tags: list[str] = Field(default_factory=list, description="tags about class")
     evidence_snippets: list[str] = Field(default_factory=list, description="direct snippets from online posts")
