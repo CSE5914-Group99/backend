@@ -31,7 +31,9 @@ class ClassScore(BaseModel):
     assessment_intensity: int = Field(0, ge=0, le=100, description="amount and difficulty of exams")
     project_intensity: int = Field(0, ge=0, le=100, description="amount and difficulty of projects")
     pace: int = Field(50, ge=0, le=100, description="pace of class")
-
+    pre_reqs: list[str] = Field(description="list of pre-req classes needed")
+    co_reqs: list[str] = Field(description="list of co-req classes needed")
+    
     # Evidence
     tags: list[str] = Field(default_factory=list, description="tags about class")
     evidence_snippets: list[str] = Field(default_factory=list, description="direct snippets from online posts")
