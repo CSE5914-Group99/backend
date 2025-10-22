@@ -1,111 +1,232 @@
-from fastapi import APIRouter, HTTPException
-from models import User, UserCreate, Product, ProductCreate
-from typing import List
-from datetime import datetime
-import sqlite3
+# routers.py
+from fastapi import APIRouter, status
+from typing import List, Optional, Dict, Any
 
-# Simple SQLite setup for user — file is in project root
-DB_PATH = "users.db"
+# Use your existing user models
+from models import User, UserCreate, UserUpdate
 
-def _conn():
-    return sqlite3.connect(DB_PATH, check_same_thread=False)
+# ---------------------------------------------------------
+# Local DTOs only for courses/schedules (not in models.py)
+# ---------------------------------------------------------
+from pydantic import BaseModel, Field
 
-def _init_users_table():
-    conn = _conn()
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT NOT NULL UNIQUE,
-            email TEXT NOT NULL UNIQUE,
-            password TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        )
-    """)
-    conn.commit()
-    conn.close()
+# --- Courses ---
+class CourseRating(BaseModel):
+    courseId: str
+    overall: float = Field(ge=0, le=5)
+    difficulty: float = Field(ge=0, le=5)
+    workload_hours_per_week: float = Field(ge=0)
 
-_init_users_table()
+class CompareItem(BaseModel):
+    courseId: str
+    term: Optional[str] = None
 
-# User microservice router
-user_router = APIRouter(prefix="/users", tags=["users"])
+class CoursesCompareRequest(BaseModel):
+    courses: List[CompareItem]
+    weights: Optional[Dict[str, float]] = Field(
+        default_factory=lambda: {"difficulty": 0.5, "workload": 0.5}
+    )
 
-@user_router.get("/", response_model=List[User])
-async def get_users():
-    conn = _conn()
-    cur = conn.cursor()
-    cur.execute("SELECT id, username, email, created_at FROM users ORDER BY id DESC")
-    rows = cur.fetchall()
-    conn.close()
+class CoursesCompareResult(BaseModel):
+    rankedCourses: List[str]           # courseIds best → worst
+    scores: Dict[str, float]           # courseId → composite score
+
+class ScheduleLoadRequest(BaseModel):
+    courseIds: List[str]
+    constraints: Optional[Dict[str, Any]] = Field(
+        default_factory=lambda: {"maxCredits": 18, "noFri": False}
+    )
+
+class ScheduleLoadResult(BaseModel):
+    weeklyHours: float
+    byCourse: Dict[str, float]         # courseId → hours/week
+
+# --- Schedules ---
+class ScheduleItem(BaseModel):
+    courseId: str
+    sectionId: Optional[str] = None
+
+class SchedulePayload(BaseModel):
+    name: Optional[str] = "Untitled"
+    items: List[ScheduleItem]
+    favorite: bool = False
+
+class ScheduleSaved(BaseModel):
+    scheduleId: str
+    userId: str
+    name: str
+    items: List[ScheduleItem]
+    favorite: bool
+
+# ---------------------------------------------------------
+# Routers
+# ---------------------------------------------------------
+courses_router  = APIRouter(prefix="/courses",  tags=["courses"])
+schedule_router = APIRouter(prefix="/schedule", tags=["schedule"])
+users_router    = APIRouter(prefix="/users",    tags=["users"])
+
+# =======================
+# COURSES
+# =======================
+
+@courses_router.get(
+    "/ratings/{courseId}",
+    response_model=CourseRating,
+    summary="Get recent ratings for a course",
+)
+async def get_course_ratings(courseId: str):
+    # TODO: fetch via orchestrator/cache
+    return CourseRating(courseId=courseId, overall=4.3, difficulty=2.8, workload_hours_per_week=7.5)
+
+@courses_router.post(
+    "/compare",
+    response_model=CoursesCompareResult,
+    summary="Compare multiple courses on difficulty & workload",
+)
+async def compare_courses(body: CoursesCompareRequest):
+    # TODO: compute composite scores
+    scores = {c.courseId: 0.7 for c in body.courses}
+    ranked = sorted(scores.keys(), key=scores.get, reverse=True)
+    return CoursesCompareResult(rankedCourses=ranked, scores=scores)
+
+@courses_router.post(
+    "/schedule-load",
+    response_model=ScheduleLoadResult,
+    summary="Simulate overall weekly load using ratings (+ constraints)",
+)
+async def simulate_schedule_load(body: ScheduleLoadRequest):
+    # TODO: real simulation logic
+    per_course = {cid: 6.0 for cid in body.courseIds}
+    return ScheduleLoadResult(weeklyHours=sum(per_course.values()), byCourse=per_course)
+
+# =======================
+# SCHEDULE
+# =======================
+
+@schedule_router.get(
+    "/{userId}",
+    response_model=List[ScheduleSaved],
+    summary="Gets all of the user's saved schedules",
+)
+async def get_user_schedules(userId: str):
+    # TODO: query Postgres
     return [
-        User(id=row[0], username=row[1], email=row[2], created_at=row[3])
-        for row in rows
+        ScheduleSaved(
+            scheduleId="sch_1",
+            userId=userId,
+            name="Spring Plan",
+            items=[ScheduleItem(courseId="CSE-2221", sectionId="001")],
+            favorite=False,
+        )
     ]
 
-@user_router.post("/", response_model=User)
-async def create_user(user: UserCreate):
-    conn = _conn()
-    cur = conn.cursor()
-
-    # Uniqueness checks
-    cur.execute("SELECT id FROM users WHERE username=? OR email=?", (user.username, user.email))
-    exists = cur.fetchone()
-    if exists:
-        conn.close()
-        raise HTTPException(status_code=400, detail="Username or email already exists")
-
-    created_at = datetime.utcnow().isoformat()
-    try:
-        cur.execute(
-            "INSERT INTO users (username, email, password, created_at) VALUES (?, ?, ?, ?)",
-            (user.username, user.email, user.password, created_at)
-        )
-        conn.commit()
-        user_id = cur.lastrowid
-    finally:
-        conn.close()
-
-    return User(id=user_id, username=user.username, email=user.email, created_at=created_at)
-
-@user_router.get("/{user_id}", response_model=User)
-async def get_user(user_id: int):
-    conn = _conn()
-    cur = conn.cursor()
-    cur.execute("SELECT id, username, email, created_at FROM users WHERE id=?", (user_id,))
-    row = cur.fetchone()
-    conn.close()
-
-    if not row:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    return User(id=row[0], username=row[1], email=row[2], created_at=row[3])
-
-@user_router.patch("/{user_id}", response_model=User)
-async def update_user(user_id: int, user: UserCreate):
-    conn = _conn()
-    cur = conn.cursor()
-    cur.execute("SELECT id FROM users WHERE id=?", (user_id,))
-    if not cur.fetchone():
-        conn.close()
-        raise HTTPException(status_code=404, detail="User not found")
-
-    cur.execute(
-        "UPDATE users SET username=?, email=?, password=? WHERE id=?",
-        (user.username, user.email, bcrypt.hash(user.password), user_id)
+@schedule_router.get(
+    "/favorite/{userId}",
+    response_model=Optional[ScheduleSaved],
+    summary="Gets the user's favorite schedule",
+)
+async def get_favorite_schedule(userId: str):
+    # TODO: query favorite in Postgres
+    return ScheduleSaved(
+        scheduleId="sch_fav",
+        userId=userId,
+        name="Favorite Plan",
+        items=[ScheduleItem(courseId="CSE-3901", sectionId="002")],
+        favorite=True,
     )
-    conn.commit()
-    conn.close()
-    return await get_user(user_id)
 
-@user_router.delete("/{user_id}")
-async def delete_user(user_id: int):
-    conn = _conn()
-    cur = conn.cursor()
-    cur.execute("DELETE FROM users WHERE id=?", (user_id,))
-    deleted = cur.rowcount
-    conn.commit()
-    conn.close()
+@schedule_router.post(
+    "/save/{userId}",
+    response_model=ScheduleSaved,
+    status_code=status.HTTP_201_CREATED,
+    summary="Saves a schedule",
+)
+async def save_schedule(userId: str, body: SchedulePayload):
+    # TODO: upsert schedule
+    return ScheduleSaved(
+        scheduleId="sch_new",
+        userId=userId,
+        name=body.name or "Untitled",
+        items=body.items,
+        favorite=body.favorite,
+    )
 
-    if not deleted:
-        raise HTTPException(status_code=404, detail="User not found")
-    return {"message": f"User {user_id} deleted successfully"}
+@schedule_router.post(
+    "/add/{userId}",
+    response_model=ScheduleSaved,
+    status_code=status.HTTP_201_CREATED,
+    summary="Add a schedule",
+)
+async def add_schedule(userId: str, body: SchedulePayload):
+    # TODO: insert new schedule
+    return ScheduleSaved(
+        scheduleId="sch_added",
+        userId=userId,
+        name=body.name or "Untitled",
+        items=body.items,
+        favorite=body.favorite,
+    )
+
+# Added: delete schedule
+@schedule_router.delete(
+    "/{userId}/{scheduleId}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a schedule",
+)
+async def delete_schedule(userId: str, scheduleId: str):
+    # TODO: delete in Postgres; 404 if not found
+    return
+
+# =======================
+# USERS
+# =======================
+
+@users_router.post(
+    "/",
+    response_model=User,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a new user",
+)
+async def create_user(user: UserCreate):
+    # TODO: persist & hash password
+    return User(id=1, username=user.username, email=user.email)
+
+@users_router.get(
+    "/{userId}",
+    response_model=User,
+    summary="Get a user by ID",
+)
+async def get_user(userId: int):
+    # TODO: fetch from Postgres
+    return User(id=userId, username="sample", email="sample@example.com")
+
+@users_router.put(
+    "/{userId}",
+    response_model=User,
+    summary="Update a user by ID",
+)
+async def update_user(userId: int, user: UserUpdate):
+    # TODO: partial update
+    return User(id=userId, username=user.username or "sample", email=user.email or "sample@example.com")
+
+@users_router.delete(
+    "/{userId}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a user by ID",
+)
+async def delete_user(userId: int):
+    # TODO: delete; 404 if not found
+    return
+
+# =======================
+# Helper to attach to FastAPI app
+# =======================
+def include_all_routers(app):
+    """
+    In main.py:
+        from routers import include_all_routers
+        include_all_routers(app)
+    """
+    app.include_router(courses_router)
+    app.include_router(schedule_router)
+    app.include_router(users_router)
