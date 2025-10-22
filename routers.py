@@ -2,49 +2,14 @@
 from fastapi import APIRouter, status
 from typing import List, Optional, Dict, Any
 # Use your existing user models
-from models import User, UserCreate, UserUpdate, CourseRating, CoursesCompareRequest, CoursesCompareResult, ScheduleLoadRequest, ScheduleLoadResult, ScheduleSaved, ScheduleItem, SchedulePayload
+from models import User, UserCreate, UserUpdate, ScheduleLoadRequest, ScheduleLoadResult, ScheduleSaved, ScheduleItem, SchedulePayload
 from pydantic import BaseModel, Field
 
 # ---------------------------------------------------------
 # Routers
 # ---------------------------------------------------------
-courses_router  = APIRouter(prefix="/courses",  tags=["courses"])
 schedule_router = APIRouter(prefix="/schedule", tags=["schedule"])
 users_router    = APIRouter(prefix="/users",    tags=["users"])
-
-# =======================
-# COURSES
-# =======================
-
-@courses_router.get(
-    "/ratings/{courseId}",
-    response_model=CourseRating,
-    summary="Get recent ratings for a course",
-)
-async def get_course_ratings(courseId: str):
-    # TODO: fetch via orchestrator/cache
-    return CourseRating(courseId=courseId, overall=4.3, difficulty=2.8, workload_hours_per_week=7.5)
-
-@courses_router.post(
-    "/compare",
-    response_model=CoursesCompareResult,
-    summary="Compare multiple courses on difficulty & workload",
-)
-async def compare_courses(body: CoursesCompareRequest):
-    # TODO: compute composite scores
-    scores = {c.courseId: 0.7 for c in body.courses}
-    ranked = sorted(scores.keys(), key=scores.get, reverse=True)
-    return CoursesCompareResult(rankedCourses=ranked, scores=scores)
-
-@courses_router.post(
-    "/schedule-load",
-    response_model=ScheduleLoadResult,
-    summary="Simulate overall weekly load using ratings (+ constraints)",
-)
-async def simulate_schedule_load(body: ScheduleLoadRequest):
-    # TODO: real simulation logic
-    per_course = {cid: 6.0 for cid in body.courseIds}
-    return ScheduleLoadResult(weeklyHours=sum(per_course.values()), byCourse=per_course)
 
 # =======================
 # SCHEDULE
@@ -82,7 +47,7 @@ async def get_favorite_schedule(userId: str):
         favorite=True,
     )
 
-@schedule_router.post(
+@schedule_router.put(
     "/save/{userId}",
     response_model=ScheduleSaved,
     status_code=status.HTTP_201_CREATED,
