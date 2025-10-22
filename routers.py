@@ -1,62 +1,9 @@
 # routers.py
 from fastapi import APIRouter, status
 from typing import List, Optional, Dict, Any
-
 # Use your existing user models
-from models import User, UserCreate, UserUpdate
-
-# ---------------------------------------------------------
-# Local DTOs only for courses/schedules (not in models.py)
-# ---------------------------------------------------------
+from models import User, UserCreate, UserUpdate, CourseRating, CoursesCompareRequest, CoursesCompareResult, ScheduleLoadRequest, ScheduleLoadResult, ScheduleSaved, ScheduleItem, SchedulePayload
 from pydantic import BaseModel, Field
-
-# --- Courses ---
-class CourseRating(BaseModel):
-    courseId: str
-    overall: float = Field(ge=0, le=5)
-    difficulty: float = Field(ge=0, le=5)
-    workload_hours_per_week: float = Field(ge=0)
-
-class CompareItem(BaseModel):
-    courseId: str
-    term: Optional[str] = None
-
-class CoursesCompareRequest(BaseModel):
-    courses: List[CompareItem]
-    weights: Optional[Dict[str, float]] = Field(
-        default_factory=lambda: {"difficulty": 0.5, "workload": 0.5}
-    )
-
-class CoursesCompareResult(BaseModel):
-    rankedCourses: List[str]           # courseIds best → worst
-    scores: Dict[str, float]           # courseId → composite score
-
-class ScheduleLoadRequest(BaseModel):
-    courseIds: List[str]
-    constraints: Optional[Dict[str, Any]] = Field(
-        default_factory=lambda: {"maxCredits": 18, "noFri": False}
-    )
-
-class ScheduleLoadResult(BaseModel):
-    weeklyHours: float
-    byCourse: Dict[str, float]         # courseId → hours/week
-
-# --- Schedules ---
-class ScheduleItem(BaseModel):
-    courseId: str
-    sectionId: Optional[str] = None
-
-class SchedulePayload(BaseModel):
-    name: Optional[str] = "Untitled"
-    items: List[ScheduleItem]
-    favorite: bool = False
-
-class ScheduleSaved(BaseModel):
-    scheduleId: str
-    userId: str
-    name: str
-    items: List[ScheduleItem]
-    favorite: bool
 
 # ---------------------------------------------------------
 # Routers

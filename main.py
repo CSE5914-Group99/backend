@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routers import user_router
+from routers import users_router, schedule_router
 from courses_router import courses_router
 import uvicorn
 from config import settings
@@ -27,8 +27,9 @@ async def root():
 async def health_check():
     return {"status": "healthy"}
 
-app.include_router(user_router)
+app.include_router(users_router)
 app.include_router(courses_router)
+app.include_router(schedule_router)
 
 if __name__ == "__main__":
     uvicorn.run(app, host=settings.api_host, port=settings.api_port)
