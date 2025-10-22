@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routers import user_router, product_router
+from routers import user_router
+from courses_router import courses_router
 import uvicorn
 from config import settings
 from db import lifespan 
@@ -15,7 +16,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -29,7 +30,7 @@ async def health_check():
     return {"status": "healthy"}
 
 app.include_router(user_router)
-app.include_router(product_router)
+app.include_router(courses_router)
 
 if __name__ == "__main__":
     uvicorn.run(app, host=settings.api_host, port=settings.api_port)

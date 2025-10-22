@@ -19,7 +19,7 @@ venv.bak/
 # IDE
 .vscode/
 .idea/
-./claude
+.claude/
 *.swp
 *.swo
 

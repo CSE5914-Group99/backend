@@ -1,5 +1,5 @@
-# config.py
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field
+from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     database_url: str = "sqlite:///./test.db"
@@ -8,7 +8,11 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 30
     api_host: str = "0.0.0.0"
     api_port: int = 8000
+    
+    openai_api_key: str | None = Field(default=None, validation_alias="OPENAI_API_KEY")
+    tavily_api_key: str | None = Field(default=None, validation_alias="TAVILY_API_KEY")
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    class Config:
+        env_file = ".env"
 
 settings = Settings()
