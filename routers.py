@@ -221,12 +221,12 @@ async def delete_user(userId: int):
 # =======================
 # Helper to attach to FastAPI app
 # =======================
-def include_all_routers(app):
+#def include_all_routers(app):
     """
     In main.py:
         from routers import include_all_routers
         include_all_routers(app)
     """
-    app.include_router(courses_router)
-    app.include_router(schedule_router)
-    app.include_router(users_router)
+   # app.include_router(courses_router)
+   # app.include_router(schedule_router)
+   # app.include_router(users_router)
