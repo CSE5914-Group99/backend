@@ -10,11 +10,11 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage
 
 # Import tools
-from agents.tools.internet_search import basic_tavily_search
-#from agents.tools.osu_search import osu_search
-#from agents.tools.reddit_search import reddit_search
-#from agents.tools.coursicle_search import coursicle_search
-#from agents.tools.rate_my_professor import rate_my_professor_search
+from tools.internet_search import basic_tavily_search
+#from tools.osu_search import osu_search
+#from tools.reddit_search import reddit_search
+#from tools.coursicle_search import coursicle_search
+#from tools.rate_my_professor import rate_my_professor_search
 
 # TODO
 # Implement all tools and import them here and add them to thhe tool list below
@@ -115,7 +115,7 @@ class ClassScore(BaseModel):
     # Evidence
     tags: list[str] = Field(default_factory=list, description="tags about class")
     evidence_snippets: list[str] = Field(default_factory=list, description="direct snippets from online posts")
-    confidence: float = Field(0.6, ge=0.0, le=1.0, description="amount and difficulty of exams")
+    confidence: float = Field(0.6, ge=0.0, le=1.0, description="confidence about class score (more data online = more sure about assigned score)")
 
 # Define the state for the graph
 class ClassGradingState(TypedDict):
