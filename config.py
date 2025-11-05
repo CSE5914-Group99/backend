@@ -1,8 +1,12 @@
 from pydantic import Field
 from pydantic_settings import BaseSettings
 
+
 class Settings(BaseSettings):
-    database_url: str = "sqlite:///./test.db"
+    database_url: str = Field(
+        default="postgresql+asyncpg://postgres:postgres@localhost:5432/backend",
+        validation_alias="DATABASE_URL",
+    )
     secret_key: str = "your-secret-key-here"
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
@@ -14,5 +18,6 @@ class Settings(BaseSettings):
 
     class Config:
         env_file = ".env"
+
 
 settings = Settings()
