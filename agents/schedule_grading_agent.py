@@ -11,10 +11,10 @@ from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
 
 # Import the class grading agent
-from class_grading_agent import ClassScore, ClassGradingState, class_grading_graph
+from .class_grading_agent import ClassScore, ClassGradingState, class_grading_graph
 
 # Import tools
-from tools.internet_search import basic_tavily_search
+from .tools.internet_search import basic_tavily_search
 
 # Pydantic model for LLM-generated adjusted scores
 class ScheduleAnalysis(BaseModel):

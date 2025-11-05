@@ -10,11 +10,12 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage
 
 # Import tools
-from tools.internet_search import basic_tavily_search
-#from tools.osu_search import osu_search
-#from tools.reddit_search import reddit_search
-#from tools.coursicle_search import coursicle_search
-#from tools.rate_my_professor import rate_my_professor_search
+# Use relative import so deployment does not treat tools as top-level package
+from .tools.internet_search import basic_tavily_search
+#from .tools.osu_search import osu_search
+#from .tools.reddit_search import reddit_search
+#from .tools.coursicle_search import coursicle_search
+#from .tools.rate_my_professor import rate_my_professor_search
 
 # TODO
 # Implement all tools and import them here and add them to thhe tool list below
