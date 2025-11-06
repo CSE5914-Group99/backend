@@ -22,6 +22,7 @@ Database connection is configured via the `DATABASE_URL` environment variable in
 ```
 DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/backend
 ```
+(the '+asyncpg' is important for making sure that calls to the db are async)
 
 ## Starting the Database
 

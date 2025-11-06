@@ -13,7 +13,16 @@ def get_engine() -> AsyncEngine:
     """Lazily create (and reuse) the async engine for the configured database."""
     global _engine
     if _engine is None:
-        _engine = create_async_engine(settings.database_url, echo=False, future=True)
+        # Configure SSL for asyncpg through connect_args
+        connect_args = {}
+        if 'asyncpg' in settings.database_url:
+            connect_args['ssl'] = 'require'
+        _engine = create_async_engine(
+            settings.database_url,
+            echo=False,
+            future=True,
+            connect_args=connect_args
+        )
     return _engine
 
 

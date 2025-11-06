@@ -8,6 +8,7 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import create_react_agent
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage
+from sqlalchemy.ext.asyncio import AsyncSession
 
 # Import tools
 # Use relative import so deployment does not treat tools as top-level package
@@ -17,9 +18,11 @@ from .tools.internet_search import basic_tavily_search
 #from .tools.coursicle_search import coursicle_search
 #from .tools.rate_my_professor import rate_my_professor_search
 
-# TODO
-# Implement all tools and import them here and add them to thhe tool list below
-# Implement caching of class scores
+# Import CRUD functions for caching
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).parent.parent))
+from db.functions.courses import get_course, upsert_course
 
 prompt = '''
 You are an expert Ohio State University class difficulty analyzer. Your job is to research and evaluate the difficulty of OSU classes to help students make informed course selection decisions.
@@ -27,18 +30,24 @@ You are an expert Ohio State University class difficulty analyzer. Your job is t
 ## Your Task
 Analyze the given class and provide a comprehensive difficulty assessment using multiple metrics. Be objective, evidence-based, and student-focused.
 
+**IMPORTANT**: If a specific instructor/professor name is provided, you MUST factor in instructor-specific information. The same course can vary significantly in difficulty depending on who teaches it.
+
 ## Research Process
 1. **Search for information** about the class using available tools:
    - Course syllabi, descriptions, and requirements
+   - **If instructor is provided**: Search specifically for that instructor's teaching style, grading policies, and student reviews
    - Student reviews and experiences (Reddit, RateMyProfessor, Coursicle)
    - Official OSU course catalogs and department resources
    - Discussion forums and student communities
 
 2. **Collect evidence**: Save direct quotes and snippets from your sources that support your scoring decisions
+   - **If instructor is provided**: Prioritize instructor-specific reviews and feedback
 
 3. **Analyze holistically**: Consider workload, conceptual difficulty, assessment burden, pacing, and student feedback
+   - **If instructor is provided**: Weight instructor-specific factors heavily in your assessment (teaching clarity, grading strictness, assignment load, exam difficulty)
 
 ## Scoring Guidelines
+**Note**: If an instructor is specified, adjust all scores based on that instructor's teaching style, grading policies, and workload expectations.
 
 ### Overall Score (1-100)
 Holistic difficulty score combining all factors:
@@ -47,18 +56,21 @@ Holistic difficulty score combining all factors:
 - 41-60: Moderate, average college course
 - 61-80: Challenging, requires significant effort
 - 81-100: Extremely difficult, demanding course
+- **With instructor**: Reflect instructor-specific difficulty variations (same course can be 40 with one prof, 80 with another)
 
 ### Time Load (0.0-8.0)
 How many credit hours does this class FEEL like in terms of weekly time commitment?
 - If a 3-credit class feels like 3 hours/week → score ~3.0
 - If it feels like 6 hours/week → score ~6.0
 - Consider: homework, studying, projects, reading
+- **With instructor**: Factor in instructor's assignment load and grading expectations
 
 ### Rigor (0-100)
 Conceptual and technical depth:
 - 0-30: Memorization-based, straightforward concepts
 - 31-60: Moderate analytical thinking required
 - 61-100: Deep theoretical understanding, complex problem-solving
+- **With instructor**: Consider how deeply instructor covers material vs surface-level treatment
 
 ### Assessment Intensity (0-100)
 Frequency and difficulty of exams/quizzes:
@@ -66,32 +78,44 @@ Frequency and difficulty of exams/quizzes:
 - 0-30: Few, straightforward assessments
 - 31-60: Regular exams of moderate difficulty
 - 61-100: Frequent, high-stakes, difficult exams
+- **With instructor**: This varies SIGNIFICANTLY by instructor - prioritize instructor-specific exam difficulty
 
 ### Project Intensity (0-100)
 Complexity and time requirements for projects/assignments:
 - 0-30: Light homework, simple assignments
 - 31-60: Moderate projects, regular homework
 - 61-100: Major projects, extensive coding/writing/research
+- **With instructor**: Factor in instructor's project requirements and grading strictness
 
 ### Pace (0-100)
 Speed of material coverage:
 - 0-30: Slow, plenty of review time
 - 31-60: Moderate, steady progression
 - 61-100: Fast, covers large amounts quickly
+- **With instructor**: Reflect instructor's teaching pace and time management
 
 ### Prerequisites & Co-requisites
 List the required and recommended prerequisite/co-requisite courses.
 
+## Summary Guidelines
+- **With instructor**: Mention instructor-specific characteristics (e.g., "Prof. Smith's section is known for rigorous exams but clear lectures")
+- **Without instructor**: Provide general course overview across all instructors
+- Keep it concise (2-3 sentences max)
+
 ## Evidence Requirements
 - **Tags**: Add descriptive tags (e.g., "math-heavy", "project-based", "memorization", "time-consuming", "well-taught")
+  - **If instructor provided**: Add instructor-specific tags (e.g., "smith-tough-grader", "jones-great-teacher")
 - **Evidence Snippets**: Include 3-5 direct quotes from student reviews or course materials that justify your scores
+  - **If instructor provided**: Prioritize quotes specifically mentioning that instructor
 - **Confidence**: Rate your confidence (0.0-1.0) based on:
   - 0.0-0.4: Very limited data, mostly guessing
   - 0.5-0.7: Some data available, reasonable estimate
   - 0.8-1.0: Abundant reliable data, high confidence
+  - **Lower confidence if instructor is specified but no instructor-specific data is found**
 
 ## Important Notes
-- Be objective: Don't inflate or deflate scores based on instructor quality alone
+- **Instructor matters**: The same course can range from easy to extremely difficult depending on the instructor
+- Be objective: Balance course content difficulty with instructor-specific factors
 - Acknowledge uncertainty: If data is sparse, lower your confidence score
 - Look for patterns: Multiple students mentioning the same issues carries more weight
 - Consider recency: Recent reviews are more relevant than old ones
@@ -122,8 +146,10 @@ class ClassScore(BaseModel):
 class ClassGradingState(TypedDict):
     messages: Annotated[list, add_messages]
     class_name: str
+    teacher_name: str | None
     class_score: ClassScore | None
     cached: bool
+    session: AsyncSession | None  # Database session for caching
 
 # Initialize the ReAct agent with tools
 llm = ChatOpenAI(model="gpt-5-mini", temperature=1)
@@ -136,10 +162,28 @@ agent = create_react_agent(
 )
 
 # Node 1: Check cache for class info
-def check_cache(state: ClassGradingState) -> ClassGradingState:
-    """Check if class information is already cached"""
-    # TODO: Implement actual cache lookup logic
-    # For now, always return no cache
+async def check_cache(state: ClassGradingState) -> ClassGradingState:
+    """Check if class information is already cached in the database"""
+    session = state.get("session")
+    class_name = state.get("class_name")
+    teacher_name = state.get("teacher_name")
+
+    try:
+        # Query database for cached rating
+        cached_course = await get_course(session, class_name, teacher_name)
+
+        if cached_course:
+            # Found cached data - convert JSON to ClassScore
+            class_score = ClassScore(**cached_course.course_rating)
+            return {
+                "cached": True,
+                "class_score": class_score
+            }
+    except Exception as e:
+        # If cache lookup fails, continue to agent
+        print(f"Cache lookup error: {e}")
+
+    # No cache found or error occurred
     return {
         "cached": False,
         "class_score": None
@@ -156,13 +200,24 @@ def score_class_agent(state: ClassGradingState) -> ClassGradingState:
     }
 
 # Node 3: Cache class score and relevant course info
-def cache_class_score(state: ClassGradingState) -> ClassGradingState:
-    """Cache the class scoring information and relevant course info"""
-    # TODO: Implement actual caching logic
-    # For now, just mark as cached without modifying the class_score
-    return {
-        "cached": True
-    }
+async def cache_class_score(state: ClassGradingState) -> ClassGradingState:
+    """Cache the class scoring information in the database"""
+    session = state.get("session")
+    class_name = state.get("class_name")
+    teacher_name = state.get("teacher_name")
+    class_score = state.get("class_score")
+
+    try:
+        # Convert ClassScore to dict for JSON storage
+        course_rating = class_score.model_dump()
+
+        # Upsert to database (create or update)
+        await upsert_course(session, class_name, teacher_name, course_rating)
+
+        return {"cached": True}
+    except Exception as e:
+        print(f"Error caching course rating: {e}")
+        return {"cached": False}
 
 # Conditional edge, Route based on cache hit/miss
 def route_after_cache_check(state: ClassGradingState) -> Literal["score_class_agent", "end"]:
