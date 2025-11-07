@@ -7,6 +7,7 @@ from langchain_core.messages import HumanMessage
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agents.class_grading_agent import ClassScore, class_grading_graph
+from agents.schedule_grading_agent import ClassTeacherTuple, ScheduleScore, schedule_grading_graph
 from db.session import get_session
 
 courses_router = APIRouter(prefix="/courses", tags=["courses"])
@@ -41,10 +42,28 @@ async def ratings_courseId(
     result = await class_grading_graph.ainvoke(initial_state)
     return result["class_score"]
 
+@courses_router.post("/schedule-load", response_model=ScheduleScore)
+async def schedule_load(
+    courses: List[ClassTeacherTuple],
+    session: AsyncSession = Depends(get_session)
+):
+    """
+    Score a complete schedule of classes.
+    Takes a list of class/teacher tuples and returns a comprehensive schedule analysis
+    including individual class scores and overall schedule difficulty metrics.
+    """
+    initial_state = {
+        "schedule": courses,
+        "schedule_score": None,
+        "messages": [],
+        "session": session
+    }
 
-@courses_router.post("/schedule-load", response_model=List[ClassScore])
-async def schedule_load(courseIds: List[str]):
-    return
+    # Run the schedule grading graph
+    result = await schedule_grading_graph.ainvoke(initial_state)
+
+    # Return the complete schedule score object
+    return result["schedule_score"]
 
 
 @courses_router.post("/compare", response_model=List[ClassScore])

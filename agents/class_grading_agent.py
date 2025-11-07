@@ -190,10 +190,10 @@ async def check_cache(state: ClassGradingState) -> ClassGradingState:
     }
 
 # Node 2: Score class agent (calls tools)
-def score_class_agent(state: ClassGradingState) -> ClassGradingState:
+async def score_class_agent(state: ClassGradingState) -> ClassGradingState:
     """Agent that calls various tools to score the class"""
     messages = state["messages"]
-    response = agent.invoke({"messages": messages}, debug=False)
+    response = await agent.ainvoke({"messages": messages}, debug=False)
     return {
         "messages": response["messages"],
         "class_score": response['structured_response']
