@@ -77,7 +77,7 @@ Analyze the given schedule considering:
 3. **Number of classes**: More classes = more context switching, more deadlines to track
 4. **Class interactions**: Do hard classes stack? Are exam schedules likely to overlap?
 5. **Time commitment reality**: Does the combined time load create unsustainable weeks?
-6. **User constraints**: Any mentioned time constraints or other commitments
+6. **User constraints**: IMPORTANT - Pay special attention to any user-specified constraints (e.g., part-time job, athletics, family commitments, health conditions). These significantly impact schedule manageability and should heavily influence your difficulty assessment.
 
 ## Adjustment Philosophy
 - **Don't just average**: A schedule with 5 moderately hard classes can be harder than 3 very hard classes
@@ -85,6 +85,7 @@ Analyze the given schedule considering:
 - **Account for juggling**: 6 classes at 60/100 difficulty each is harder to manage than 4 classes at 75/100
 - **Time load realism**: If individual time loads suggest 25+ hours/week, that's unsustainable with other commitments
 - **Credit hour context**: 18 credit hours of hard classes is exponentially harder than 12 credit hours of hard classes
+- **Factor in constraints**: If user has external commitments (work, sports, etc.), increase difficulty scores accordingly. A 15-hour course load with a 20-hour/week job is effectively like taking 20+ credit hours.
 
 ## Scoring Guidelines
 
@@ -125,7 +126,8 @@ Write a 2-4 sentence summary that:
 1. Characterizes the overall difficulty (light/manageable/challenging/heavy/overwhelming)
 2. Highlights key concerns (e.g., "heavy project load", "many concurrent deadlines", "intense rigor")
 3. Mentions the time commitment
-4. Provides honest guidance about manageability
+4. **If user constraints were provided, explicitly address how they impact schedule manageability**
+5. Provides honest guidance about manageability
 
 Be direct and honest. Students need realistic assessments to make good decisions.
 '''
@@ -136,6 +138,7 @@ class ScheduleGradingState(TypedDict):
     schedule: list[ClassTeacherTuple]  # List of class names and teachers (e.g., ["CSE 2331", "MATH 2568"])
     schedule_score: ScheduleScore | None  # Final schedule score object
     messages: Annotated[list, add_messages]  # Messages for the ReAct agent
+    constraints: str | None # User constraints for scoring
     user_id: int  # User ID for creating schedule
     schedule_id: int | None  # Created schedule ID (populated after saving)
     session: AsyncSession | None  # Database session for saving
@@ -223,7 +226,7 @@ async def summarize_schedule(state: ScheduleGradingState) -> ScheduleGradingStat
     # Prepare prompt for ReAct agent
     classes_info = "\n\n".join(class_summaries)
 
-    # TODO: Get user constraints from state
+    # Get user constraints from state
     user_constraints = state.get("constraints", "None specified")
 
     analysis_request = f"""## Schedule to Analyze
@@ -257,7 +260,7 @@ Now provide your holistic analysis of this schedule with adjusted difficulty sco
         adjusted_project_intensity=analysis.adjusted_project_intensity,
         time_load=analysis.time_load,
         adjusted_rigor=analysis.adjusted_rigor,
-        contraints=user_constraints,
+        contraints=state.get("constraints", ""),
         confidence=analysis.confidence
     )
 
@@ -298,17 +301,15 @@ async def save_schedule_score(state: ScheduleGradingState) -> ScheduleGradingSta
             adjusted_project_intensity=schedule_score.adjusted_project_intensity,
             time_load=schedule_score.time_load,
             adjusted_rigor=schedule_score.adjusted_rigor,
-            constraints=schedule_score.contraints,
+            constraints=state.get("constraints"),
             confidence=schedule_score.confidence
         )
 
-        # Extract course list from class_scores (keys are ClassTeacherTuple objects)
-        courses = []
-        for class_teacher_tuple in schedule_score.class_scores.keys():
-            # Normalize both class_id and teacher_name to match how they're stored in courses table
-            class_id_normalized = class_teacher_tuple.class_id.replace(" ", "").lower()
-            teacher_name_id_form = class_teacher_tuple.teacher.replace(" ", "").lower() if class_teacher_tuple.teacher else 'unknown'
-            courses.append((class_id_normalized, teacher_name_id_form))
+        # Extract course list from class_scores (keys are already normalized ClassTeacherTuple objects)
+        courses = [
+            (class_teacher_tuple.class_id, class_teacher_tuple.teacher or "unknown")
+            for class_teacher_tuple in schedule_score.class_scores.keys()
+        ]
 
         # Create schedule-course links
         await add_courses_to_schedule(
@@ -392,6 +393,7 @@ def create_schedule_grading_graph():
         schedule: list[ClassTeacherTuple]
         schedule_score: Annotated[ScheduleScore | None, merge_schedule_scores]
         messages: Annotated[list, add_messages]
+        constraints: str | None
         user_id: int
         schedule_id: int | None
         session: AsyncSession | None
@@ -407,7 +409,7 @@ def create_schedule_grading_graph():
     graph.add_node("score_class_agent_graph", score_class_agent_graph)
     graph.add_node("join", join_node)
     graph.add_node("summarize_schedule", summarize_schedule)
-    graph.add_node("cache_schedule_score", save_schedule_score)
+    graph.add_node("save_schedule_score", save_schedule_score)
 
     # Fan out function for parallel scoring
     def fan_out_classes(state: ScheduleGradingStateWithReducer):
@@ -420,6 +422,12 @@ def create_schedule_grading_graph():
             # Normalize class_id and teacher_name
             class_id = class_teacher.class_id.replace(" ", "").lower()
             teacher_name = class_teacher.teacher.replace(" ", "").lower() if class_teacher.teacher else 'unknown'
+
+            # Create normalized ClassTeacherTuple to use as dictionary key
+            normalized_tuple = ClassTeacherTuple(
+                class_id=class_id,
+                teacher=teacher_name
+            )
 
             # Build message content based on whether teacher is provided
             if teacher_name and teacher_name != 'unknown':
@@ -437,7 +445,7 @@ def create_schedule_grading_graph():
                         "class_score": None,
                         "cached": False,
                         "session": session,
-                        "class_teacher_tuple": class_teacher  # Pass the original tuple to use as dict key
+                        "class_teacher_tuple": normalized_tuple  # Pass normalized tuple as dict key
                     }
                 )
             )
@@ -458,8 +466,8 @@ def create_schedule_grading_graph():
     graph.add_edge("join", "summarize_schedule")
 
     # Then cache the result
-    graph.add_edge("summarize_schedule", "cache_schedule_score")
-    graph.add_edge("cache_schedule_score", END)
+    graph.add_edge("summarize_schedule", "save_schedule_score")
+    graph.add_edge("save_schedule_score", END)
 
     return graph.compile()
 

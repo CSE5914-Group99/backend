@@ -29,7 +29,7 @@ async def ratings_courseId(
         message_content = f"Evaluate the class {courseId} taught by Professor {teacher_name}"
     else:
         message_content = f"Evaluate the class {courseId} (no specific instructor provided)"
-    print("Message Content:", message_content)
+
     test_messages = [HumanMessage(content=message_content)]
     initial_state = {
         "messages": test_messages,
@@ -46,6 +46,7 @@ async def ratings_courseId(
 class ScheduleLoadRequest(BaseModel):
     courses: List[ClassTeacherTuple]
     user_id: int
+    constraints: str | None = None
 @courses_router.post("/schedule-load", response_model=ScheduleScore)
 async def schedule_load(
     request: ScheduleLoadRequest,
@@ -63,16 +64,13 @@ async def schedule_load(
         "schedule_score": None,
         "messages": [],
         "user_id": request.user_id,
+        "constraints": request.constraints,
         "schedule_id": None,
         "session": session
     }
 
     # Run the schedule grading graph
     result = await schedule_grading_graph.ainvoke(initial_state)
-
-    # Log the created schedule ID for debugging
-    if result.get("schedule_id"):
-        print(f"Schedule saved with ID: {result['schedule_id']}")
 
     # Return the complete schedule score object
     return result["schedule_score"]
