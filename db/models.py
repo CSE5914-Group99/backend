@@ -28,11 +28,15 @@ class User(Base):
     __table_args__ = (
         UniqueConstraint("username", name="uq_users_username"),
         UniqueConstraint("email", name="uq_users_email"),
+        UniqueConstraint("google_uid", name="uq_users_google_uid"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     username: Mapped[str] = mapped_column(String(50), nullable=False)
     email: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Keep hashed_password nullable for OAuth-created users who may not have one
+    hashed_password: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    google_uid: Mapped[str | None] = mapped_column(String(255), nullable=True)
     first_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     last_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     date_of_birth: Mapped[date | None] = mapped_column(Date, nullable=True)
@@ -70,15 +74,19 @@ class Schedule(Base):
     )
     # Timing/section info for courses in this schedule
     detailed_courses: Mapped[list[ScheduleCourse]] = relationship(
-        cascade="all, delete-orphan", lazy="selectin", foreign_keys="[ScheduleCourse.schedule_id]"
+        back_populates="schedule", cascade="all, delete-orphan", lazy="selectin"
     )
 
 
 class Course(Base):
     __tablename__ = "courses"
+    __table_args__ = (
+        UniqueConstraint("course_id", "teacher_name", name="uq_course_teacher"),
+    )
 
-    course_id: Mapped[str] = mapped_column(String(50), primary_key=True)
-    teacher_name: Mapped[str] = mapped_column(String(255), primary_key=True, default="unknown")
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    course_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    teacher_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     course_rating: Mapped[dict] = mapped_column(JSON, nullable=False)
 
 
@@ -119,3 +127,5 @@ class ScheduleCourse(Base):
     teacher_name: Mapped[str] = mapped_column(String(255), nullable=False, default="unknown")
     section_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
     times_days: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Relationship back to parent schedule for automatic schedule_id assignment
+    schedule: Mapped[Schedule] = relationship(back_populates="detailed_courses")
