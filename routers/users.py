@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status, Response
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db import User as UserORM, get_session
-from schemas import User, UserCreate, UserUpdate
+from schemas import User, UserCreate, UserExists, UserUpdate
 
 users_router = APIRouter(prefix="/users", tags=["users"])
 
@@ -39,11 +39,11 @@ async def create_user(
     db_user = UserORM(
         username=user.username,
         email=user.email,
-        hashed_password=hash_password(user.password),
         google_uid=user.google_uid,
         first_name=user.first_name,
         last_name=user.last_name,
         date_of_birth=user.date_of_birth,
+        preferences=user.preferences or {},
     )
     session.add(db_user)
     await session.flush()
@@ -77,6 +77,19 @@ async def get_user_by_google(google_uid: str, session: AsyncSession = Depends(ge
     return User.model_validate(user)
 
 
+@users_router.get(
+    "/google/{google_uid}/exists",
+    response_model=UserExists,
+    summary="Check if a user exists by Google UID",
+)
+async def user_exists_by_google(google_uid: str, session: AsyncSession = Depends(get_session)):
+    """Return a flag indicating whether a user with the provided Google/Firebase UID exists."""
+    user = await session.scalar(select(UserORM).where(UserORM.google_uid == google_uid))
+    if not user:
+        return UserExists(exists=False, user=None)
+    return UserExists(exists=True, user=User.model_validate(user))
+
+
 @users_router.put(
     "/{userId}",
     response_model=User,
@@ -103,8 +116,11 @@ async def update_user(
             raise HTTPException(status_code=409, detail="Email already in use")
         user.email = payload.email
 
-    if payload.password:
-        user.password = payload.password
+    if payload.google_uid and payload.google_uid != user.google_uid:
+        exists = await session.scalar(select(UserORM).where(UserORM.google_uid == payload.google_uid))
+        if exists:
+            raise HTTPException(status_code=409, detail="Google UID already in use")
+        user.google_uid = payload.google_uid
 
     if payload.first_name is not None:
         user.first_name = payload.first_name
@@ -114,6 +130,9 @@ async def update_user(
 
     if payload.date_of_birth is not None:
         user.date_of_birth = payload.date_of_birth
+
+    if payload.preferences is not None:
+        user.preferences = payload.preferences
 
     await session.commit()
     await session.refresh(user)

@@ -9,7 +9,7 @@ from .schedule import (
     SchedulePayload,
     ScheduleSaved,
 )
-from .user import LoginRequest, Token, User, UserCreate, UserUpdate
+from .user import LoginRequest, Token, User, UserCreate, UserExists, UserUpdate
 
 __all__ = [
     "CompareItem",
@@ -26,5 +26,6 @@ __all__ = [
     "Token",
     "User",
     "UserCreate",
+    "UserExists",
     "UserUpdate",
 ]

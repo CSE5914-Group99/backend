@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from typing import Any
 
 from sqlalchemy import (
     Boolean,
@@ -35,9 +36,8 @@ class User(Base):
     username: Mapped[str] = mapped_column(String(50), nullable=False)
     email: Mapped[str] = mapped_column(String(255), nullable=False)
 
-    # Keep hashed_password nullable for OAuth-created users who may not have one
-    hashed_password: Mapped[str | None] = mapped_column(String(255), nullable=True)
     google_uid: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    preferences: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     
     first_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     last_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
