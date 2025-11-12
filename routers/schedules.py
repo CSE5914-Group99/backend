@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select, update
+from sqlalchemy import select, update, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -23,13 +23,23 @@ from schemas import (
 schedule_router = APIRouter(prefix="/schedule", tags=["schedule"])
 
 
+def _compute_difficulty(schedule: ScheduleORM) -> float:
+    """Compute difficulty score server-side without persisting it.
+    Simple heuristic: number of items; adjust as needed.
+    """
+    try:
+        return float(len(schedule.detailed_courses or []))
+    except Exception:
+        return 0.0
+
+
 def _map_schedule(schedule: ScheduleORM) -> ScheduleSaved:
     return ScheduleSaved(
         scheduleId=schedule.id,
         userId=schedule.user_id,
         name=schedule.name,
         favorite=schedule.is_starred,
-        difficultyScore=schedule.difficulty_score,
+        difficultyScore=_compute_difficulty(schedule),
         items=[
             ScheduleCourseDetail(
                 courseId=item.course_id,
@@ -51,10 +61,19 @@ async def _ensure_user_exists(user_id: int, session: AsyncSession) -> None:
         raise HTTPException(status_code=404, detail="User not found")
 
 
-async def _get_or_create_course(course_id: str, session: AsyncSession) -> CourseORM:
-    course = await session.get(CourseORM, course_id)
+async def _get_or_create_course(course_id: str, session: AsyncSession, teacher_name: str | None = None) -> CourseORM:
+    """Fetch a Course by (course_id, teacher_name) unique pair or create if missing.
+
+    teacher_name defaults to 'unknown' when not provided.
+    """
+    tn = teacher_name or "unknown"
+    result = await session.execute(
+        select(CourseORM).where(CourseORM.course_id == course_id, CourseORM.teacher_name == tn)
+    )
+    course = result.scalars().first()
     if course is None:
-        course = CourseORM(id=course_id, name=course_id)
+        # Provide a minimal default for required JSON field
+        course = CourseORM(course_id=course_id, teacher_name=tn, course_rating={})
         session.add(course)
         await session.flush()
     return course
@@ -117,40 +136,45 @@ async def add_schedule(
 ):
     await _ensure_user_exists(userId, session)
     favorite_flag = body.favorite if body.favorite is not None else False
-    difficulty = body.difficultyScore if body.difficultyScore is not None else 0.0
-    schedule = ScheduleORM(
-        user_id=userId,
-        name=body.name or "Untitled",
-        is_starred=favorite_flag,
-        difficulty_score=difficulty,
-    )
-
-    session.add(schedule)
-    await session.flush()
-
+    # Resolve courses up front (awaits before building children to avoid later lazy loads)
     items_payload = body.items or []
-    detailed_courses: list[ScheduleCourseORM] = []
+    pre_resolved: list[tuple[str, str]] = []  # (course_id, teacher_name)
     for item in items_payload:
-        await _get_or_create_course(item.courseId, session)
-        detailed_courses.append(
-            ScheduleCourseORM(
-                schedule_id=schedule.id,
-                course_id=item.courseId,
-                section_id=item.sectionId,
-                times_days=item.timesDays,
-            )
+        teacher_name = getattr(item, "teacherName", None) or "unknown"
+        await _get_or_create_course(item.courseId, session, teacher_name)
+        pre_resolved.append((item.courseId, teacher_name))
+
+    # Build child objects fully in-memory with no awaits
+    detailed_courses: list[ScheduleCourseORM] = [
+        ScheduleCourseORM(
+            course_id=cid,
+            teacher_name=tname,
+            section_id=item.sectionId,
+            times_days=item.timesDays,
         )
-    schedule.detailed_courses = detailed_courses
+        for (cid, tname), item in zip(pre_resolved, items_payload)
+    ]
 
     activities_payload = body.activities or []
-    schedule.activities = [
+    activities: list[ScheduleActivityORM] = [
         ScheduleActivityORM(
-            schedule_id=schedule.id,
             description=activity.description,
             times_days=activity.timesDays,
         )
         for activity in activities_payload
     ]
+
+    # Construct schedule with relationships assigned before adding to session
+    schedule = ScheduleORM(
+        user_id=userId,
+        name=body.name or "Untitled",
+        is_starred=favorite_flag,
+        detailed_courses=detailed_courses,
+        activities=activities,
+    )
+
+    session.add(schedule)
+    await session.flush()
 
     if favorite_flag:
         await session.execute(
@@ -160,8 +184,18 @@ async def add_schedule(
         )
 
     await session.commit()
-    await session.refresh(schedule)
-    return _map_schedule(schedule)
+
+    # Re-load eagerly to build response without lazy loads
+    result = await session.execute(
+        select(ScheduleORM)
+        .options(
+            selectinload(ScheduleORM.detailed_courses),
+            selectinload(ScheduleORM.activities),
+        )
+        .where(ScheduleORM.id == schedule.id)
+    )
+    schedule_loaded = result.scalars().first()
+    return _map_schedule(schedule_loaded or schedule)
 
 
 @schedule_router.put(
@@ -191,31 +225,42 @@ async def save_schedule(
     if body.name:
         schedule.name = body.name
 
-    if body.difficultyScore is not None:
-        schedule.difficulty_score = body.difficultyScore
-
     if body.items is not None:
-        schedule.detailed_courses.clear()
+        # Resolve courses first
+        resolved_items: list[ScheduleCourseORM] = []
         for item in body.items:
-            await _get_or_create_course(item.courseId, session)
-            schedule.detailed_courses.append(
+            teacher_name = getattr(item, "teacherName", None) or "unknown"
+            await _get_or_create_course(item.courseId, session, teacher_name)
+            resolved_items.append(
                 ScheduleCourseORM(
                     schedule_id=schedule.id,
                     course_id=item.courseId,
+                    teacher_name=teacher_name,
                     section_id=item.sectionId,
                     times_days=item.timesDays,
                 )
             )
 
+        # Replace children via direct table ops to avoid lazy-loading collections
+        await session.execute(
+            delete(ScheduleCourseORM).where(ScheduleCourseORM.schedule_id == schedule.id)
+        )
+        session.add_all(resolved_items)
+
     if body.activities is not None:
-        schedule.activities.clear()
-        schedule.activities.extend(
-            ScheduleActivityORM(
-                schedule_id=schedule.id,
-                description=activity.description,
-                times_days=activity.timesDays,
-            )
-            for activity in body.activities
+        # Replace activities via direct table ops
+        await session.execute(
+            delete(ScheduleActivityORM).where(ScheduleActivityORM.schedule_id == schedule.id)
+        )
+        session.add_all(
+            [
+                ScheduleActivityORM(
+                    schedule_id=schedule.id,
+                    description=activity.description,
+                    times_days=activity.timesDays,
+                )
+                for activity in body.activities
+            ]
         )
 
     if body.favorite is not None:

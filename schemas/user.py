@@ -11,6 +11,7 @@ class User(BaseModel):
 
     id: Optional[int] = None
     username: str
+    google_uid: Optional[str] = None
     email: EmailStr
     first_name: Optional[str] = None
     last_name: Optional[str] = None
@@ -22,6 +23,7 @@ class UserCreate(BaseModel):
     username: str
     email: EmailStr
     password: str
+    google_uid: Optional[str] = None
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     date_of_birth: Optional[date] = None
@@ -31,6 +33,7 @@ class UserUpdate(BaseModel):
     username: Optional[str] = None
     email: Optional[EmailStr] = None
     password: Optional[str] = None
+    google_uid: Optional[str] = None
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     date_of_birth: Optional[date] = None
