@@ -6,7 +6,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db import User as UserORM, get_session
 from schemas import User, UserCreate, UserUpdate
-from security import hash_password
 
 users_router = APIRouter(prefix="/users", tags=["users"])
 
@@ -31,7 +30,7 @@ async def create_user(
     db_user = UserORM(
         username=user.username,
         email=user.email,
-        hashed_password=hash_password(user.password),
+        password=user.password,
         first_name=user.first_name,
         last_name=user.last_name,
         date_of_birth=user.date_of_birth,
@@ -82,7 +81,7 @@ async def update_user(
         user.email = payload.email
 
     if payload.password:
-        user.hashed_password = hash_password(payload.password)
+        user.password = payload.password
 
     if payload.first_name is not None:
         user.first_name = payload.first_name

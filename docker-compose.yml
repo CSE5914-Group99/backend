@@ -1,6 +1,6 @@
 services:
   db:
-    image: postgres:18
+    image: postgres:16
     environment:
       POSTGRES_DB: backend
       POSTGRES_USER: postgres
@@ -9,6 +9,12 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
 
   api:
     build: .
@@ -21,7 +27,8 @@ services:
       - .:/app
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
     depends_on:
-      - db
+      db:
+        condition: service_healthy
 
 volumes:
   postgres_data:
