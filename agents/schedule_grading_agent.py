@@ -2,19 +2,43 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from pydantic import BaseModel, Field
-from typing import TypedDict, Annotated, Literal
+from typing import Optional, TypedDict, Annotated
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from langgraph.types import Send
 from langgraph.prebuilt import create_react_agent
 from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
+from sqlalchemy.ext.asyncio import AsyncSession
 
 # Import the class grading agent
 from .class_grading_agent import ClassScore, ClassGradingState, class_grading_graph
 
 # Import tools
 from .tools.internet_search import basic_tavily_search
+
+# Import CRUD functions for database operations
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).parent.parent))
+from db.functions.schedules import create_schedule, update_schedule_scoring
+from db.functions.schedule_course_links import add_courses_to_schedule
+
+# Pydantic model for class-teacher tuple
+class ClassTeacherTuple(BaseModel):
+    class_id: str
+    teacher: Optional[str]
+
+    class Config:
+        frozen = True  # Make immutable so it can be hashable
+
+    def __hash__(self):
+        return hash((self.class_id, self.teacher))
+
+    def __eq__(self, other):
+        if not isinstance(other, ClassTeacherTuple):
+            return False
+        return self.class_id == other.class_id and self.teacher == other.teacher
 
 # Pydantic model for LLM-generated adjusted scores
 class ScheduleAnalysis(BaseModel):
@@ -30,7 +54,7 @@ class ScheduleAnalysis(BaseModel):
 # Define the ScheduleScore output model
 class ScheduleScore(BaseModel):
     """Overall schedule difficulty score and summary"""
-    class_scores: dict[str, ClassScore] = Field(description="Map of class ID to individual class scores")
+    class_scores: dict[ClassTeacherTuple, ClassScore] = Field(description="Map of class ID to individual class scores")
     total_credit_hours: int = Field(description="Total credit hours in the schedule")
     num_classes: int = Field(description="Number of classes in the schedule")
     summary: str = Field(description="overall summary of schedule difficulty")
@@ -53,7 +77,7 @@ Analyze the given schedule considering:
 3. **Number of classes**: More classes = more context switching, more deadlines to track
 4. **Class interactions**: Do hard classes stack? Are exam schedules likely to overlap?
 5. **Time commitment reality**: Does the combined time load create unsustainable weeks?
-6. **User constraints**: Any mentioned time constraints or other commitments
+6. **User constraints**: IMPORTANT - Pay special attention to any user-specified constraints (e.g., part-time job, athletics, family commitments, health conditions). These significantly impact schedule manageability and should heavily influence your difficulty assessment.
 
 ## Adjustment Philosophy
 - **Don't just average**: A schedule with 5 moderately hard classes can be harder than 3 very hard classes
@@ -61,6 +85,7 @@ Analyze the given schedule considering:
 - **Account for juggling**: 6 classes at 60/100 difficulty each is harder to manage than 4 classes at 75/100
 - **Time load realism**: If individual time loads suggest 25+ hours/week, that's unsustainable with other commitments
 - **Credit hour context**: 18 credit hours of hard classes is exponentially harder than 12 credit hours of hard classes
+- **Factor in constraints**: If user has external commitments (work, sports, etc.), increase difficulty scores accordingly. A 15-hour course load with a 20-hour/week job is effectively like taking 20+ credit hours.
 
 ## Scoring Guidelines
 
@@ -101,7 +126,8 @@ Write a 2-4 sentence summary that:
 1. Characterizes the overall difficulty (light/manageable/challenging/heavy/overwhelming)
 2. Highlights key concerns (e.g., "heavy project load", "many concurrent deadlines", "intense rigor")
 3. Mentions the time commitment
-4. Provides honest guidance about manageability
+4. **If user constraints were provided, explicitly address how they impact schedule manageability**
+5. Provides honest guidance about manageability
 
 Be direct and honest. Students need realistic assessments to make good decisions.
 '''
@@ -109,35 +135,29 @@ Be direct and honest. Students need realistic assessments to make good decisions
 # Define the state for the schedule grading graph
 class ScheduleGradingState(TypedDict):
     """State for the schedule grading agent"""
-    schedule: list[str]  # List of class names (e.g., ["CSE 2331", "MATH 2568"])
-    cached: bool  # Whether this schedule has been cached
+    schedule: list[ClassTeacherTuple]  # List of class names and teachers (e.g., ["CSE 2331", "MATH 2568"])
     schedule_score: ScheduleScore | None  # Final schedule score object
     messages: Annotated[list, add_messages]  # Messages for the ReAct agent
-
-# Node 1: Check if schedule has been cached
-def check_schedule_cache(state: ScheduleGradingState) -> ScheduleGradingState:
-    """Check if this schedule has already been scored and cached"""
-    # TODO: Implement actual cache lookup logic
-    # For now, always return no cache
-    return {
-        "cached": False,
-        "schedule_score": None
-    }
+    constraints: str | None # User constraints for scoring
+    user_id: int  # User ID for creating schedule
+    schedule_id: int | None  # Created schedule ID (populated after saving)
+    session: AsyncSession | None  # Database session for saving
 
 # Node 3: Score individual class using the class grading graph
-def score_class_agent_graph(state: ClassGradingState) -> dict:
+async def score_class_agent_graph(state: ClassGradingState) -> dict:
     """
     Execute the class grading graph for a single class.
     This node will be called in parallel for each class in the schedule.
     """
-    result = class_grading_graph.invoke(state)
-    class_name = state["class_name"]
+    result = await class_grading_graph.ainvoke(state)
+    class_teacher_tuple = state["class_teacher_tuple"]
     class_score = result["class_score"]
 
     # Create a partial ScheduleScore with just this one class
     # This will be merged with other parallel results
+    # Use ClassTeacherTuple as the key
     partial_schedule_score = ScheduleScore(
-        class_scores={class_name: class_score},
+        class_scores={class_teacher_tuple: class_score},
         total_credit_hours=0,  # Will be calculated in summarize
         num_classes=0,  # Will be calculated in summarize
         summary="",  # Will be generated by agent in summarize
@@ -166,7 +186,7 @@ schedule_analysis_agent = create_react_agent(
 )
 
 # Node 4: Summarize schedule and create ScheduleScore object using ReAct agent
-def summarize_schedule(state: ScheduleGradingState) -> ScheduleGradingState:
+async def summarize_schedule(state: ScheduleGradingState) -> ScheduleGradingState:
     """Use ReAct agent to generate nuanced schedule analysis with adjusted difficulty scores"""
     # Get the schedule_score which has been built up with class_scores from parallel executions
     current_schedule_score = state.get("schedule_score")
@@ -184,9 +204,15 @@ def summarize_schedule(state: ScheduleGradingState) -> ScheduleGradingState:
 
     # Build a summary of each class for the LLM
     class_summaries = []
-    for class_name, cs in class_scores_dict.items():
+    for class_teacher_tuple, cs in class_scores_dict.items():
+        # Format class display name with teacher if available
+        if class_teacher_tuple.teacher:
+            class_display = f"{class_teacher_tuple.class_id} (Prof. {class_teacher_tuple.teacher})"
+        else:
+            class_display = class_teacher_tuple.class_id
+
         class_summary = (
-            f"**{class_name}** ({cs.ch} credits):\n"
+            f"**{class_display}** ({cs.ch} credits):\n"
             f"  - Difficulty: {cs.score}/100\n"
             f"  - Rigor: {cs.rigor}/100\n"
             f"  - Assessment Intensity: {cs.assessment_intensity}/100\n"
@@ -200,7 +226,7 @@ def summarize_schedule(state: ScheduleGradingState) -> ScheduleGradingState:
     # Prepare prompt for ReAct agent
     classes_info = "\n\n".join(class_summaries)
 
-    # TODO: Get user constraints from state
+    # Get user constraints from state
     user_constraints = state.get("constraints", "None specified")
 
     analysis_request = f"""## Schedule to Analyze
@@ -220,7 +246,7 @@ Now provide your holistic analysis of this schedule with adjusted difficulty sco
     message = HumanMessage(content=analysis_request)
 
     # Get analysis from ReAct agent
-    agent_response = schedule_analysis_agent.invoke({"messages": [message]}, debug=False)
+    agent_response = await schedule_analysis_agent.ainvoke({"messages": [message]}, debug=False)
     analysis: ScheduleAnalysis = agent_response['structured_response']
 
     # Create final ScheduleScore object with agent-generated metrics
@@ -234,7 +260,7 @@ Now provide your holistic analysis of this schedule with adjusted difficulty sco
         adjusted_project_intensity=analysis.adjusted_project_intensity,
         time_load=analysis.time_load,
         adjusted_rigor=analysis.adjusted_rigor,
-        contraints=user_constraints,
+        contraints=state.get("constraints", ""),
         confidence=analysis.confidence
     )
 
@@ -243,14 +269,60 @@ Now provide your holistic analysis of this schedule with adjusted difficulty sco
         "messages": agent_response["messages"]
     }
 
-# Node 5: Cache the schedule score
-def cache_schedule_score(state: ScheduleGradingState) -> ScheduleGradingState:
-    """Cache the schedule scoring information for future use"""
-    # TODO: Implement actual caching logic
-    # For now, just mark as cached
-    return {
-        "cached": True
-    }
+# Node 5: Save the schedule score
+async def save_schedule_score(state: ScheduleGradingState) -> ScheduleGradingState:
+    """Save the schedule scoring information to the database"""
+    session = state.get("session")
+    user_id = state.get("user_id")
+    schedule_score = state.get("schedule_score")
+
+    # If no session or score, can't save
+    if not session or not schedule_score or not user_id:
+        return {"schedule_id": None}
+
+    try:
+        # Create a new schedule with default name
+        schedule = await create_schedule(
+            session=session,
+            user_id=user_id,
+            name="Untitled",
+            is_starred=False
+        )
+
+        # Update the schedule with scoring data
+        await update_schedule_scoring(
+            session=session,
+            schedule_id=schedule.id,
+            total_credit_hours=schedule_score.total_credit_hours,
+            num_classes=schedule_score.num_classes,
+            summary=schedule_score.summary,
+            adjusted_difficulty=schedule_score.adjusted_difficulty,
+            adjusted_assessment_intensity=schedule_score.adjusted_assessment_intensity,
+            adjusted_project_intensity=schedule_score.adjusted_project_intensity,
+            time_load=schedule_score.time_load,
+            adjusted_rigor=schedule_score.adjusted_rigor,
+            constraints=state.get("constraints"),
+            confidence=schedule_score.confidence
+        )
+
+        # Extract course list from class_scores (keys are already normalized ClassTeacherTuple objects)
+        courses = [
+            (class_teacher_tuple.class_id, class_teacher_tuple.teacher or "unknown")
+            for class_teacher_tuple in schedule_score.class_scores.keys()
+        ]
+
+        # Create schedule-course links
+        await add_courses_to_schedule(
+            session=session,
+            schedule_id=schedule.id,
+            courses=courses
+        )
+
+        return {"schedule_id": schedule.id}
+
+    except Exception as e:
+        print(f"Error saving schedule: {e}")
+        return {"schedule_id": None}
 
 # Reducer function to merge schedule scores from parallel executions
 def merge_schedule_scores(left: ScheduleScore | None, right: ScheduleScore | None) -> ScheduleScore | None:
@@ -318,10 +390,13 @@ def create_schedule_grading_graph():
 
     # Create a custom state schema with reducers for schedule_score and messages
     class ScheduleGradingStateWithReducer(TypedDict):
-        schedule: list[str]
-        cached: bool
+        schedule: list[ClassTeacherTuple]
         schedule_score: Annotated[ScheduleScore | None, merge_schedule_scores]
         messages: Annotated[list, add_messages]
+        constraints: str | None
+        user_id: int
+        schedule_id: int | None
+        session: AsyncSession | None
 
     graph = StateGraph(ScheduleGradingStateWithReducer)
 
@@ -331,41 +406,57 @@ def create_schedule_grading_graph():
         return {}
 
     # Add nodes
-    graph.add_node("check_schedule_cache", check_schedule_cache)
     graph.add_node("score_class_agent_graph", score_class_agent_graph)
     graph.add_node("join", join_node)
     graph.add_node("summarize_schedule", summarize_schedule)
-    graph.add_node("cache_schedule_score", cache_schedule_score)
+    graph.add_node("save_schedule_score", save_schedule_score)
+
+    # Fan out function for parallel scoring
+    def fan_out_classes(state: ScheduleGradingStateWithReducer):
+        """Fan out to score each class in parallel"""
+        schedule = state["schedule"]
+        session = state.get("session")
+
+        send_objects = []
+        for class_teacher in schedule:
+            # Normalize class_id and teacher_name
+            class_id = class_teacher.class_id.replace(" ", "").lower()
+            teacher_name = class_teacher.teacher.replace(" ", "").lower() if class_teacher.teacher else 'unknown'
+
+            # Create normalized ClassTeacherTuple to use as dictionary key
+            normalized_tuple = ClassTeacherTuple(
+                class_id=class_id,
+                teacher=teacher_name
+            )
+
+            # Build message content based on whether teacher is provided
+            if teacher_name and teacher_name != 'unknown':
+                message_content = f"Evaluate the class {class_id} taught by Professor {class_teacher.teacher}"
+            else:
+                message_content = f"Evaluate the class {class_id} (no specific instructor provided)"
+
+            send_objects.append(
+                Send(
+                    "score_class_agent_graph",
+                    {
+                        "messages": [HumanMessage(content=message_content)],
+                        "class_name": class_id,
+                        "teacher_name": teacher_name,
+                        "class_score": None,
+                        "cached": False,
+                        "session": session,
+                        "class_teacher_tuple": normalized_tuple  # Pass normalized tuple as dict key
+                    }
+                )
+            )
+
+        return send_objects
 
     # Add edges
-    graph.add_edge(START, "check_schedule_cache")
-
-    # Modified fan_out that routes to either summarize or parallel scoring
-    def fan_out_with_routing(state: ScheduleGradingStateWithReducer):
-        """Fan out for parallel scoring, or skip to summarize if cached"""
-        if state.get("cached") and state.get("schedule_score"):
-            # If cached, skip directly to END
-            return []
-
-        # Otherwise return Send objects for parallel execution
-        schedule = state["schedule"]
-        return [
-            Send(
-                "score_class_agent_graph",
-                {
-                    "messages": [HumanMessage(content=f"Evaluate the class {class_name}")],
-                    "class_name": class_name,
-                    "class_score": None,
-                    "cached": False
-                }
-            )
-            for class_name in schedule
-        ]
-
-    # Fan out edge using Send API for parallel execution
+    # Fan out from START using Send API for parallel execution
     graph.add_conditional_edges(
-        "check_schedule_cache",
-        fan_out_with_routing
+        START,
+        fan_out_classes
     )
 
     # After parallel scoring completes, all tasks go to join node
@@ -375,8 +466,8 @@ def create_schedule_grading_graph():
     graph.add_edge("join", "summarize_schedule")
 
     # Then cache the result
-    graph.add_edge("summarize_schedule", "cache_schedule_score")
-    graph.add_edge("cache_schedule_score", END)
+    graph.add_edge("summarize_schedule", "save_schedule_score")
+    graph.add_edge("save_schedule_score", END)
 
     return graph.compile()
 
@@ -387,13 +478,16 @@ if __name__ == "__main__":
     # run with python -m agents.schedule_grading_agent
 
     # Test the graph with a sample schedule
-    test_schedule = ["CSE2331", "PHYSICS 1250"]
+    test_schedule = [
+        ClassTeacherTuple(class_id="CSE2331", teacher=None),
+        ClassTeacherTuple(class_id="PHYSICS 1250", teacher="John Doe")
+    ]
 
     initial_state = {
         "schedule": test_schedule,
-        "cached": False,
         "schedule_score": None,
-        "messages": []
+        "messages": [],
+        "session": None  # No session for local testing
     }
 
     print(f"Scoring schedule: {test_schedule}")
