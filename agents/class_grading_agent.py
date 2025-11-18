@@ -13,10 +13,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # Import tools
 # Use relative import so deployment does not treat tools as top-level package
 from .tools.internet_search import basic_tavily_search
+from .tools.osu_course_search import osu_course_search_tool
+from .tools.rate_my_professor import rate_my_professor_tool
 #from .tools.osu_search import osu_search
 #from .tools.reddit_search import reddit_search
 #from .tools.coursicle_search import coursicle_search
-#from .tools.rate_my_professor import rate_my_professor_search
 
 # Import CRUD functions for caching
 import sys
@@ -153,7 +154,11 @@ class ClassGradingState(TypedDict):
 
 # Initialize the ReAct agent with tools
 llm = ChatOpenAI(model="gpt-5-mini", temperature=1)
-tools = [basic_tavily_search]#, osu_search, reddit_search, coursicle_search, rate_my_professor_search]
+tools = [
+    basic_tavily_search,
+    osu_course_search_tool,
+    rate_my_professor_tool,
+]  # , osu_search, reddit_search, coursicle_search
 agent = create_react_agent(
     model=llm,
     tools=tools,
