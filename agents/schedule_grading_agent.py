@@ -14,15 +14,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # Import the class grading agent
 from .class_grading_agent import ClassScore, ClassGradingState, class_grading_graph
 
+# Import session factory for creating new sessions in parallel operations
+from db.session import get_session_factory
+
 # Import tools
 from .tools.internet_search import basic_tavily_search
 
-# Import CRUD functions for database operations
-import sys
-from pathlib import Path
-sys.path.append(str(Path(__file__).parent.parent))
-from db.functions.schedules import create_schedule, update_schedule_scoring
-from db.functions.schedule_course_links import add_courses_to_schedule
 
 # Pydantic model for class-teacher tuple
 class ClassTeacherTuple(BaseModel):
@@ -139,9 +136,7 @@ class ScheduleGradingState(TypedDict):
     schedule_score: ScheduleScore | None  # Final schedule score object
     messages: Annotated[list, add_messages]  # Messages for the ReAct agent
     constraints: str | None # User constraints for scoring
-    user_id: int  # User ID for creating schedule
-    schedule_id: int | None  # Created schedule ID (populated after saving)
-    session: AsyncSession | None  # Database session for saving
+    session: AsyncSession | None  # Database session
 
 # Node 3: Score individual class using the class grading graph
 async def score_class_agent_graph(state: ClassGradingState) -> dict:
@@ -149,7 +144,13 @@ async def score_class_agent_graph(state: ClassGradingState) -> dict:
     Execute the class grading graph for a single class.
     This node will be called in parallel for each class in the schedule.
     """
-    result = await class_grading_graph.ainvoke(state)
+    # Create a new session for this parallel operation to avoid concurrent session errors
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        # Update state with new session
+        state_with_session = {**state, "session": session}
+        result = await class_grading_graph.ainvoke(state_with_session)
+
     class_teacher_tuple = state["class_teacher_tuple"]
     class_score = result["class_score"]
 
@@ -269,61 +270,6 @@ Now provide your holistic analysis of this schedule with adjusted difficulty sco
         "messages": agent_response["messages"]
     }
 
-# Node 5: Save the schedule score
-async def save_schedule_score(state: ScheduleGradingState) -> ScheduleGradingState:
-    """Save the schedule scoring information to the database"""
-    session = state.get("session")
-    user_id = state.get("user_id")
-    schedule_score = state.get("schedule_score")
-
-    # If no session or score, can't save
-    if not session or not schedule_score or not user_id:
-        return {"schedule_id": None}
-
-    try:
-        # Create a new schedule with default name
-        schedule = await create_schedule(
-            session=session,
-            user_id=user_id,
-            name="Untitled",
-            is_starred=False
-        )
-
-        # Update the schedule with scoring data
-        await update_schedule_scoring(
-            session=session,
-            schedule_id=schedule.id,
-            total_credit_hours=schedule_score.total_credit_hours,
-            num_classes=schedule_score.num_classes,
-            summary=schedule_score.summary,
-            adjusted_difficulty=schedule_score.adjusted_difficulty,
-            adjusted_assessment_intensity=schedule_score.adjusted_assessment_intensity,
-            adjusted_project_intensity=schedule_score.adjusted_project_intensity,
-            time_load=schedule_score.time_load,
-            adjusted_rigor=schedule_score.adjusted_rigor,
-            constraints=state.get("constraints"),
-            confidence=schedule_score.confidence
-        )
-
-        # Extract course list from class_scores (keys are already normalized ClassTeacherTuple objects)
-        courses = [
-            (class_teacher_tuple.class_id, class_teacher_tuple.teacher or "unknown")
-            for class_teacher_tuple in schedule_score.class_scores.keys()
-        ]
-
-        # Create schedule-course links
-        await add_courses_to_schedule(
-            session=session,
-            schedule_id=schedule.id,
-            courses=courses
-        )
-
-        return {"schedule_id": schedule.id}
-
-    except Exception as e:
-        print(f"Error saving schedule: {e}")
-        return {"schedule_id": None}
-
 # Reducer function to merge schedule scores from parallel executions
 def merge_schedule_scores(left: ScheduleScore | None, right: ScheduleScore | None) -> ScheduleScore | None:
     """Merge schedule scores from parallel executions by combining class_scores dicts"""
@@ -394,8 +340,6 @@ def create_schedule_grading_graph():
         schedule_score: Annotated[ScheduleScore | None, merge_schedule_scores]
         messages: Annotated[list, add_messages]
         constraints: str | None
-        user_id: int
-        schedule_id: int | None
         session: AsyncSession | None
 
     graph = StateGraph(ScheduleGradingStateWithReducer)
@@ -409,7 +353,6 @@ def create_schedule_grading_graph():
     graph.add_node("score_class_agent_graph", score_class_agent_graph)
     graph.add_node("join", join_node)
     graph.add_node("summarize_schedule", summarize_schedule)
-    graph.add_node("save_schedule_score", save_schedule_score)
 
     # Fan out function for parallel scoring
     def fan_out_classes(state: ScheduleGradingStateWithReducer):
@@ -465,9 +408,8 @@ def create_schedule_grading_graph():
     # After join, go to summarize
     graph.add_edge("join", "summarize_schedule")
 
-    # Then cache the result
-    graph.add_edge("summarize_schedule", "save_schedule_score")
-    graph.add_edge("save_schedule_score", END)
+    # End after summarizing
+    graph.add_edge("summarize_schedule", END)
 
     return graph.compile()
 

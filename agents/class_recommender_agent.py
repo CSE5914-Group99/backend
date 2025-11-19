@@ -9,6 +9,7 @@ from langgraph.graph.message import add_messages
 from langgraph.types import Send
 from langgraph.prebuilt import create_react_agent
 from langchain_core.messages import HumanMessage
+from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,16 +17,68 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .class_grading_agent import ClassScore, class_grading_graph
 from .schedule_grading_agent import ClassTeacherTuple, ScheduleScore
 
+# Import session factory for creating new sessions in parallel operations
+from db.session import get_session_factory
+
 # Import tools
 from .tools.internet_search import basic_tavily_search
 from .tools.osu_course_search import osu_course_search_tool
 from .tools.rate_my_professor import rate_my_professor_tool
 
+# Tool for grading a class (used by search agent to compare difficulties)
+@tool
+async def grade_class_tool(class_id: str, teacher: str = "unknown") -> str:
+    """
+    Get the difficulty score for a specific class and teacher combination.
+    Use this to compare the difficulty of current schedule classes with potential alternatives.
+
+    Args:
+        class_id: The class ID (e.g., "CSE 2331", "MATH 1151")
+        teacher: The teacher's name (e.g., "John Smith"). Use "unknown" if not specified.
+
+    Returns:
+        A summary of the class difficulty including score, time load, and key metrics.
+    """
+    # Normalize inputs
+    normalized_class_id = class_id.replace(" ", "").lower()
+    normalized_teacher = teacher.replace(" ", "").lower() if teacher else "unknown"
+
+    message_content = f"Evaluate the class {class_id}"
+    if teacher and teacher != "unknown":
+        message_content += f" taught by Professor {teacher}"
+
+    # Create a new session for this operation
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        result = await class_grading_graph.ainvoke({
+            "messages": [HumanMessage(content=message_content)],
+            "class_name": normalized_class_id,
+            "teacher_name": normalized_teacher,
+            "class_score": None,
+            "cached": False,
+            "session": session
+        })
+
+    class_score = result.get("class_score")
+
+    if class_score:
+        return f"""Class: {class_id} (Teacher: {teacher})
+Difficulty Score: {class_score.score}/100
+Credit Hours: {class_score.ch}
+Time Load: {class_score.time_load} hrs/week
+Rigor: {class_score.rigor}/100
+Assessment Intensity: {class_score.assessment_intensity}/100
+Project Intensity: {class_score.project_intensity}/100
+Summary: {class_score.summary}
+Confidence: {class_score.confidence}"""
+    else:
+        return f"Could not retrieve difficulty score for {class_id} with {teacher}"
+
 # Pydantic model for a single time slot
 class TimeSlot(BaseModel):
-    day: Literal["M", "T", "W", "R", "F", "S", "U"] = Field(description="Day of the week (M=Monday, T=Tuesday, W=Wednesday, R=Thursday, F=Friday, S=Saturday, U=Sunday)")
-    start_time: int = Field(ge=0, le=1440, description="Start time in minutes from midnight (e.g., 600 = 10:00 AM)")
-    end_time: int = Field(ge=0, le=1440, description="End time in minutes from midnight (e.g., 655 = 10:55 AM)")
+    start_time: str = Field(description="Start time in HH:mm format (e.g., '10:00', '14:30')")
+    end_time: str = Field(description="End time in HH:mm format (e.g., '10:55', '15:45')")
+    repeat_days: list[str] = Field(description="List of days the class meets (e.g., ['Monday', 'Wednesday', 'Friday'])")
 
 # Pydantic model for a class with time information
 class ScheduleClassWithTime(BaseModel):
@@ -76,13 +129,28 @@ class RecommenderOutput(BaseModel):
     overall_summary: str = Field(description="Summary of all recommendations and advice")
     confidence: float = Field(ge=0.0, le=1.0, description="Overall confidence in recommendations")
 
+# Helper function to convert HH:mm to minutes from midnight
+def time_to_minutes(time_str: str) -> int:
+    """Convert HH:mm format to minutes from midnight"""
+    hours, mins = map(int, time_str.split(":"))
+    return hours * 60 + mins
+
 # Helper function to check if two time slots conflict
 def slots_conflict(slot1: TimeSlot, slot2: TimeSlot) -> bool:
-    """Check if two time slots conflict (same day and overlapping times)"""
-    if slot1.day != slot2.day:
+    """Check if two time slots conflict (overlapping days and times)"""
+    # Check if any days overlap
+    common_days = set(slot1.repeat_days) & set(slot2.repeat_days)
+    if not common_days:
         return False
+
+    # Convert times to minutes for comparison
+    start1 = time_to_minutes(slot1.start_time)
+    end1 = time_to_minutes(slot1.end_time)
+    start2 = time_to_minutes(slot2.start_time)
+    end2 = time_to_minutes(slot2.end_time)
+
     # Check if time ranges overlap
-    return not (slot1.end_time <= slot2.start_time or slot2.end_time <= slot1.start_time)
+    return not (end1 <= start2 or end2 <= start1)
 
 # Helper function to check if a class conflicts with a list of time slots
 def class_conflicts_with_slots(class_slots: list[TimeSlot], existing_slots: list[TimeSlot]) -> bool:
@@ -99,17 +167,10 @@ def format_time_slots(slots: list[TimeSlot]) -> str:
     if not slots:
         return "TBD"
 
-    # Group by time range
-    day_map = {"M": "Mon", "T": "Tue", "W": "Wed", "R": "Thu", "F": "Fri", "S": "Sat", "U": "Sun"}
-
     parts = []
     for slot in slots:
-        hours_start = slot.start_time // 60
-        mins_start = slot.start_time % 60
-        hours_end = slot.end_time // 60
-        mins_end = slot.end_time % 60
-
-        time_str = f"{day_map[slot.day]} {hours_start}:{mins_start:02d}-{hours_end}:{mins_end:02d}"
+        days_str = "/".join(day[:3] for day in slot.repeat_days)
+        time_str = f"{days_str} {slot.start_time}-{slot.end_time}"
         parts.append(time_str)
 
     return ", ".join(parts)
@@ -145,13 +206,18 @@ Search for alternative classes that could replace or be added to a student's sch
 - **osu_course_search_tool**: Search OSU's course catalog for available classes
 - **rate_my_professor_tool**: Look up professor ratings
 - **basic_tavily_search**: Search web for course discussions and reviews
+- **grade_class_tool**: Get difficulty scores for a class/teacher combination. Use this to:
+  - Check the difficulty of classes currently in the schedule
+  - Compare difficulty between the current class and potential alternatives
+  - Find easier sections taught by different teachers
 
 ## Search Strategy
 For each modification request:
-1. Understand what requirement the original class fulfills
+1. First, use grade_class_tool to get the difficulty of the class being replaced (so you know what to compare against)
 2. Search for 4-6 potential alternatives that match the criteria
 3. Get specific section times from OSU course search
 4. Note which professors are well-rated
+5. Optionally use grade_class_tool to quickly compare difficulty of alternatives
 
 ## IMPORTANT: Different Sections and Teachers
 - If the student wants an easier version of a class, look for different SECTIONS with different teachers
@@ -168,12 +234,15 @@ When providing alternatives, use these formats for proper database lookup:
 
 ## Time Slot Format
 For each alternative, provide time_slots as a list with:
-- day: "M", "T", "W", "R", or "F" (M=Monday, T=Tuesday, W=Wednesday, R=Thursday, F=Friday)
-- start_time: minutes from midnight (e.g., 600 = 10:00 AM, 810 = 1:30 PM)
-- end_time: minutes from midnight
+- start_time: Time in HH:mm format (e.g., "10:00", "14:30")
+- end_time: Time in HH:mm format (e.g., "10:55", "15:45")
+- repeat_days: List of day names (e.g., ["Monday", "Wednesday", "Friday"])
 
 Example: A class at MWF 10:00-10:55 would have time_slots:
-[{"day": "M", "start_time": 600, "end_time": 655}, {"day": "W", "start_time": 600, "end_time": 655}, {"day": "F", "start_time": 600, "end_time": 655}]
+[{"start_time": "10:00", "end_time": "10:55", "repeat_days": ["Monday", "Wednesday", "Friday"]}]
+
+Example: A class at TR 9:35-10:55 would have time_slots:
+[{"start_time": "09:35", "end_time": "10:55", "repeat_days": ["Tuesday", "Thursday"]}]
 
 Find 4-6 alternatives per replacement request. Include different options (different sections, different professors, different but equivalent classes).
 '''
@@ -220,6 +289,7 @@ search_tools = [
     basic_tavily_search,
     osu_course_search_tool,
     rate_my_professor_tool,
+    grade_class_tool,
 ]
 
 find_alternatives_agent = create_react_agent(
@@ -317,7 +387,6 @@ def filter_time_conflicts(state: RecommenderState) -> dict:
 # Node 3: Grade a single alternative class
 async def grade_alternative(state: dict) -> dict:
     alt = state["alternative"]
-    session = state.get("session")
 
     # Normalize inputs
     normalized_class_id = alt.class_id.replace(" ", "").lower()
@@ -327,20 +396,22 @@ async def grade_alternative(state: dict) -> dict:
     if alt.teacher:
         message_content += f" taught by Professor {alt.teacher}"
 
-    # Call the class grading graph
-    result = await class_grading_graph.ainvoke({
-        "messages": [HumanMessage(content=message_content)],
-        "class_name": normalized_class_id,
-        "teacher_name": normalized_teacher,
-        "class_score": None,
-        "cached": False,
-        "session": session
-    })
+    # Create a new session for this parallel operation to avoid concurrent session errors
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        result = await class_grading_graph.ainvoke({
+            "messages": [HumanMessage(content=message_content)],
+            "class_name": normalized_class_id,
+            "teacher_name": normalized_teacher,
+            "class_score": None,
+            "cached": False,
+            "session": session
+        })
 
     class_score = result.get("class_score")
 
     # Create key for this alternative
-    time_key = json.dumps([{"day": s.day, "start": s.start_time, "end": s.end_time} for s in alt.time_slots])
+    time_key = json.dumps([{"start": s.start_time, "end": s.end_time, "days": s.repeat_days} for s in alt.time_slots])
     key = f"{normalized_class_id}|{normalized_teacher}|{time_key}"
 
     if class_score:
@@ -491,32 +562,26 @@ if __name__ == "__main__":
     import asyncio
 
     # Test data with standardized time slots
-    # MWF 10:00-10:55 = M/W/F at 600-655 minutes
     test_schedule = [
         ScheduleClassWithTime(
             class_id="CSE 2331",
             teacher="Smith",
             time_slots=[
-                TimeSlot(day="M", start_time=600, end_time=655),
-                TimeSlot(day="W", start_time=600, end_time=655),
-                TimeSlot(day="F", start_time=600, end_time=655)
+                TimeSlot(start_time="10:00", end_time="10:55", repeat_days=["Monday", "Wednesday", "Friday"])
             ]
         ),
         ScheduleClassWithTime(
             class_id="MATH 2568",
             teacher=None,
             time_slots=[
-                TimeSlot(day="T", start_time=575, end_time=655),
-                TimeSlot(day="R", start_time=575, end_time=655)
+                TimeSlot(start_time="09:35", end_time="10:55", repeat_days=["Tuesday", "Thursday"])
             ]
         ),
         ScheduleClassWithTime(
             class_id="PHYSICS 1250",
             teacher="Johnson",
             time_slots=[
-                TimeSlot(day="M", start_time=720, end_time=775),
-                TimeSlot(day="W", start_time=720, end_time=775),
-                TimeSlot(day="F", start_time=720, end_time=775)
+                TimeSlot(start_time="12:00", end_time="12:55", repeat_days=["Monday", "Wednesday", "Friday"])
             ]
         )
     ]

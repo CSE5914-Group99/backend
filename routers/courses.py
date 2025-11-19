@@ -13,7 +13,6 @@ from agents.class_recommender_agent import (
     ScheduleClassWithTime,
     ModificationRequest,
     RecommenderOutput,
-    TimeSlot,
     class_recommender_graph
 )
 from db.session import get_session
@@ -52,8 +51,8 @@ async def ratings_courseId(
 # Request model for schedule-load endpoint
 class ScheduleLoadRequest(BaseModel):
     courses: List[ClassTeacherTuple]
-    user_id: int
     constraints: str | None = None
+
 @courses_router.post("/schedule-load", response_model=ScheduleScore)
 async def schedule_load(
     request: ScheduleLoadRequest,
@@ -63,16 +62,12 @@ async def schedule_load(
     Score a complete schedule of classes.
     Takes a list of class/teacher tuples and returns a comprehensive schedule analysis
     including individual class scores and overall schedule difficulty metrics.
-
-    The scored schedule will be saved to the database and associated with the user.
     """
     initial_state = {
         "schedule": request.courses,
         "schedule_score": None,
         "messages": [],
-        "user_id": request.user_id,
         "constraints": request.constraints,
-        "schedule_id": None,
         "session": session
     }
 
@@ -82,10 +77,6 @@ async def schedule_load(
     # Return the complete schedule score object
     return result["schedule_score"]
 
-
-@courses_router.post("/compare", response_model=List[ClassScore])
-async def compare(courseIds: List[str]):
-    return
 
 class ClassRecommendationRequest(BaseModel):
     schedule: List[ScheduleClassWithTime]
@@ -111,9 +102,11 @@ async def class_recommendations(
           "class_id": "CSE 2331",
           "teacher": "Smith",
           "time_slots": [
-            {"day": "M", "start_time": 600, "end_time": 655},
-            {"day": "W", "start_time": 600, "end_time": 655},
-            {"day": "F", "start_time": 600, "end_time": 655}
+            {
+              "start_time": "10:00",
+              "end_time": "10:55",
+              "repeat_days": ["Monday", "Wednesday", "Friday"]
+            }
           ]
         }
       ],
@@ -128,12 +121,8 @@ async def class_recommendations(
     }
 
     Time format:
-    - day: "M" (Mon), "T" (Tue), "W" (Wed), "R" (Thu), "F" (Fri), "S" (Sat), "U" (Sun)
-    - start_time/end_time: Minutes from midnight
-      - 8:00 AM  = 480
-      - 10:00 AM = 600
-      - 1:30 PM  = 810
-      - 3:00 PM  = 900
+    - start_time/end_time: HH:mm format (e.g., "10:00", "14:30")
+    - repeat_days: List of day names (e.g., ["Monday", "Wednesday", "Friday"])
 
     Response:
     {
