@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     
     openai_api_key: str | None = Field(default=None, validation_alias="OPENAI_API_KEY")
     tavily_api_key: str | None = Field(default=None, validation_alias="TAVILY_API_KEY")
+    reddit_user_script: str | None = Field(default=None, validation_alias="REDDIT_USER_SCRIPT")
+    reddit_secret: str | None = Field(default=None, validation_alias="REDDIT_SECRET")
 
     class Config:
         env_file = ".env"
