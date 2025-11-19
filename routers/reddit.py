@@ -36,8 +36,20 @@ async def reddit_search(
     except RuntimeError as exc:
         LOGGER.warning("Reddit credentials not configured: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except httpx.HTTPStatusError as exc:
+        LOGGER.warning(
+            "Reddit API returned %s for %s: %s",
+            exc.response.status_code,
+            exc.request.url,
+            exc.response.text,
+        )
+        detail = (
+            f"Reddit API error {exc.response.status_code}: "
+            f"{exc.response.text[:200]}"
+        )
+        raise HTTPException(status_code=502, detail=detail) from exc
     except httpx.HTTPError as exc:
-        LOGGER.exception("Reddit API request failed")
+        LOGGER.exception("Reddit API request failed: %s", exc)
         raise HTTPException(status_code=502, detail="Failed to reach Reddit API") from exc
     except Exception as exc:  # pragma: no cover - defensive logging
         LOGGER.exception("Unexpected error in Reddit search")
