@@ -67,7 +67,7 @@ def get_engine() -> AsyncEngine:
             echo=False,
             future=True,
             pool_pre_ping=True,
-            connect_args=connect_args or None,
+            connect_args=connect_args,
         )
     return _engine
 
