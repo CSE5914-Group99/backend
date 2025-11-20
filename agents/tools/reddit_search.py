@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import os
 import time
@@ -11,6 +13,8 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from dotenv import load_dotenv
+from langchain_core.tools import tool
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
@@ -181,6 +185,34 @@ def search_reddit_threads(
     finally:
         if close_session and client is not None:
             client.close()
+
+
+class RedditSearchInput(BaseModel):
+    """Schema for invoking the Reddit search tool."""
+
+    course_number: str = Field(..., description="Course identifier, e.g. 'CSE 2231'")
+    teacher_name: str = Field(..., description="Instructor name to include in the search query")
+    limit_threads: int = Field(5, ge=1, le=30, description="Maximum number of threads to retrieve")
+    comment_limit: int = Field(100, ge=1, le=500, description="Maximum number of comments per thread")
+
+
+@tool("reddit_search", args_schema=RedditSearchInput)
+async def reddit_search_tool(
+    course_number: str,
+    teacher_name: str,
+    limit_threads: int = 5,
+    comment_limit: int = 100,
+) -> str:
+    """Fetch recent Reddit discussions about an OSU course and instructor."""
+
+    payload = await asyncio.to_thread(
+        search_reddit_threads,
+        course_number,
+        teacher_name,
+        limit_threads=limit_threads,
+        comment_limit=comment_limit,
+    )
+    return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
 if __name__ == "__main__":

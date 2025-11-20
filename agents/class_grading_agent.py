@@ -15,8 +15,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .tools.internet_search import basic_tavily_search
 from .tools.osu_course_search import osu_course_search_tool
 from .tools.rate_my_professor import rate_my_professor_tool
+from .tools.reddit_search import reddit_search_tool
 #from .tools.osu_search import osu_search
-#from .tools.reddit_search import reddit_search
 #from .tools.coursicle_search import coursicle_search
 
 # Import CRUD functions for caching
@@ -158,6 +158,7 @@ tools = [
     basic_tavily_search,
     osu_course_search_tool,
     rate_my_professor_tool,
+    reddit_search_tool,
 ]  # , osu_search, reddit_search, coursicle_search
 agent = create_react_agent(
     model=llm,
