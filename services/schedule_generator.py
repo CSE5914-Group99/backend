@@ -465,6 +465,10 @@ async def analyze_generated_schedules(request: AnalyzeSchedulesRequest) -> List[
     Analyze a list of schedules using the AI agent to calculate difficulty, time load, etc.
     """
     async def analyze_one(schedule: Schedule):
+        if not schedule.courses:
+            LOGGER.info(f"Skipping analysis for empty schedule {schedule.id}")
+            return schedule
+
         # Convert Schedule to ClassTeacherTuple for agent
         schedule_tuples = []
         for course in schedule.courses:
@@ -478,63 +482,72 @@ async def analyze_generated_schedules(request: AnalyzeSchedulesRequest) -> List[
         initial_state = {
             "schedule": schedule_tuples,
             "schedule_score": None,
-            "messages": "",
+            "messages": [],
             "constraints": str(request.preferences) if request.preferences else None,
             "session": None 
         }
         
-        try:
-            LOGGER.info(f"Starting analysis for schedule {schedule.id} with {len(schedule_tuples)} courses")
-            result = await schedule_grading_graph.ainvoke(initial_state)
-            score: ScheduleScore = result.get("schedule_score")
-            
-            if score:
-                LOGGER.info(f"Analysis complete for schedule {schedule.id}. Score: {score.adjusted_difficulty}")
+        for attempt in range(3):
+            try:
+                LOGGER.info(f"Starting analysis for schedule {schedule.id} with {len(schedule_tuples)} courses (Attempt {attempt+1})")
+                result = await schedule_grading_graph.ainvoke(initial_state)
+                score: ScheduleScore = result.get("schedule_score")
                 
-                # Populate grading details dictionary
-                schedule.gradingDetails = {
-                    "summary": score.summary,
-                    "adjusted_difficulty": score.adjusted_difficulty,
-                    "adjusted_assessment_intensity": score.adjusted_assessment_intensity,
-                    "adjusted_project_intensity": score.adjusted_project_intensity,
-                    "time_load": score.time_load,
-                    "adjusted_rigor": score.adjusted_rigor,
-                    "constraints": score.constraints,
-                    "confidence": score.confidence
-                }
-                
-                # Populate top-level convenience fields
-                schedule.difficultyScore = score.adjusted_difficulty
-                schedule.weeklyHours = score.time_load
-                schedule.creditHours = score.total_credit_hours
-                
-                # Update individual course scores
-                if score.class_scores:
-                    LOGGER.info(f"Updating {len(score.class_scores)} course scores for schedule {schedule.id}")
-                    for course in schedule.courses:
-                        # Normalize course info to match agent's keys
-                        c_id = course.courseId.replace(" ", "").lower() if course.courseId else ""
-                        t_name = course.instructor.replace(" ", "").lower() if course.instructor else "unknown"
-                        
-                        # Find matching score
-                        found = False
-                        for key, class_score in score.class_scores.items():
-                            # print(f"Comparing {c_id}|{t_name} with {key.class_id}|{key.teacher}")
-                            if key.class_id == c_id and key.teacher == t_name:
-                                course.difficultyRating = class_score.score
-                                course.ratingDetails = class_score.model_dump()
-                                found = True
-                                break
-                        if not found:
-                            LOGGER.warning(f"No score found for {c_id} {t_name}")
+                if score:
+                    LOGGER.info(f"Analysis complete for schedule {schedule.id}. Score: {score.adjusted_difficulty}")
+                    
+                    # Populate grading details dictionary
+                    schedule.gradingDetails = {
+                        "summary": score.summary,
+                        "adjusted_difficulty": score.adjusted_difficulty,
+                        "adjusted_assessment_intensity": score.adjusted_assessment_intensity,
+                        "adjusted_project_intensity": score.adjusted_project_intensity,
+                        "time_load": score.time_load,
+                        "adjusted_rigor": score.adjusted_rigor,
+                        "constraints": score.constraints,
+                        "confidence": score.confidence
+                    }
+                    
+                    # Populate top-level convenience fields
+                    schedule.difficultyScore = score.adjusted_difficulty
+                    schedule.weeklyHours = score.time_load
+                    schedule.creditHours = score.total_credit_hours
+                    
+                    # Update individual course scores
+                    if score.class_scores:
+                        LOGGER.info(f"Updating {len(score.class_scores)} course scores for schedule {schedule.id}")
+                        for course in schedule.courses:
+                            # Normalize course info to match agent's keys
+                            c_id = course.courseId.replace(" ", "").lower() if course.courseId else ""
+                            t_name = course.instructor.replace(" ", "").lower() if course.instructor else "unknown"
+                            
+                            # Find matching score
+                            found = False
+                            for key, class_score in score.class_scores.items():
+                                # print(f"Comparing {c_id}|{t_name} with {key.class_id}|{key.teacher}")
+                                if key.class_id == c_id and key.teacher == t_name:
+                                    course.difficultyRating = class_score.score
+                                    course.ratingDetails = class_score.model_dump()
+                                    found = True
+                                    break
+                            if not found:
+                                LOGGER.warning(f"No score found for {c_id} {t_name}")
+                    else:
+                        LOGGER.warning(f"No class scores returned for schedule {schedule.id}")
+                    
+                    # If successful, break the retry loop
+                    break
                 else:
-                    LOGGER.warning(f"No class scores returned for schedule {schedule.id}")
-            else:
-                LOGGER.warning(f"No score object returned for schedule {schedule.id}")
-        except Exception as e:
-            LOGGER.error(f"Error analyzing schedule {schedule.id}: {e}")
-            import traceback
-            traceback.print_exc()
+                    LOGGER.warning(f"No score object returned for schedule {schedule.id}")
+                    # If no score but no exception, maybe we shouldn't retry? 
+                    # But let's retry just in case it was a glitch.
+            except Exception as e:
+                LOGGER.error(f"Error analyzing schedule {schedule.id} (Attempt {attempt+1}): {e}")
+                if attempt == 2:
+                    import traceback
+                    traceback.print_exc()
+                else:
+                    await asyncio.sleep(1)
             
         return schedule
 

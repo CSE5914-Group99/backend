@@ -107,6 +107,12 @@ async def add_schedule(
         for event in events_payload
     ]
 
+    # Prepare grading details
+    # Ensure weeklyHours is saved into grading_details as time_load
+    grading_details = body.gradingDetails or {}
+    if body.weeklyHours is not None:
+        grading_details['time_load'] = body.weeklyHours
+
     # Construct schedule
     schedule = ScheduleORM(
         user_id=user_id,
@@ -116,7 +122,7 @@ async def add_schedule(
         semester=body.semester,
         section_ids=section_ids,
         activities=activities,
-        grading_details=body.gradingDetails,
+        grading_details=grading_details,
         total_credit_hours=int(body.creditHours) if body.creditHours is not None else None,
         difficulty_score=float(body.difficultyScore) if body.difficultyScore is not None else None,
         num_classes=len(courses_payload),
