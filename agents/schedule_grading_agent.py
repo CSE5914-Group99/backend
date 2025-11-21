@@ -60,7 +60,7 @@ class ScheduleScore(BaseModel):
     adjusted_project_intensity: int = Field(0, ge=0, le=100, description="amount and difficulty of projects adjusted for credit hours and contraints")
     time_load: float = Field(ge=0, le=30, description="weekly time/effort vibe, how many credit hours it feels like for this entire schedule")
     adjusted_rigor: int = Field(0, ge=0, le=100, description="conceptual/technical depth")
-    contraints: str = Field(description="constraints given by user to agent to score schedule (ie. other commitments, time contraints, etc.)")
+    constraints: str = Field(description="constraints given by user to agent to score schedule (ie. other commitments, time contraints, etc.)")
     confidence: float = Field(0.6, ge=0.0, le=1.0, description="confidence about schedule score (more data online about each class = more sure about assigned score)")
 
 # Prompt for LLM schedule analysis
@@ -167,7 +167,7 @@ async def score_class_agent_graph(state: ClassGradingState) -> dict:
         adjusted_project_intensity=0,  # Will be calculated in summarize
         time_load=0.0,  # Will be calculated in summarize
         adjusted_rigor=0,  # Will be calculated in summarize
-        contraints="",  # Will be set in summarize
+        constraints="",  # Will be set in summarize
         confidence=0.0  # Will be calculated in summarize
     )
 
@@ -261,7 +261,7 @@ Now provide your holistic analysis of this schedule with adjusted difficulty sco
         adjusted_project_intensity=analysis.adjusted_project_intensity,
         time_load=analysis.time_load,
         adjusted_rigor=analysis.adjusted_rigor,
-        contraints=state.get("constraints", ""),
+        constraints=state.get("constraints") or "",
         confidence=analysis.confidence
     )
 
@@ -295,7 +295,7 @@ def merge_schedule_scores(left: ScheduleScore | None, right: ScheduleScore | Non
             adjusted_project_intensity=right.adjusted_project_intensity,
             time_load=right.time_load,
             adjusted_rigor=right.adjusted_rigor,
-            contraints=right.contraints,
+            constraints=right.constraints,
             confidence=right.confidence
         )
     elif left.summary and left.summary != "":
@@ -310,7 +310,7 @@ def merge_schedule_scores(left: ScheduleScore | None, right: ScheduleScore | Non
             adjusted_project_intensity=left.adjusted_project_intensity,
             time_load=left.time_load,
             adjusted_rigor=left.adjusted_rigor,
-            contraints=left.contraints,
+            constraints=left.constraints,
             confidence=left.confidence
         )
     else:
@@ -326,7 +326,7 @@ def merge_schedule_scores(left: ScheduleScore | None, right: ScheduleScore | Non
             adjusted_project_intensity=0,  # Will be calculated in summarize_schedule
             time_load=0.0,  # Will be calculated in summarize_schedule
             adjusted_rigor=0,  # Will be calculated in summarize_schedule
-            contraints="",  # Will be set in summarize_schedule
+            constraints="",  # Will be set in summarize_schedule
             confidence=0.0  # Will be calculated in summarize_schedule
         )
 

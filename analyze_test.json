@@ -1,0 +1,358 @@
+{
+  "schedules": [
+    {
+      "id": 0,
+      "name": "Option 1",
+      "favorite": false,
+      "campus": "Columbus",
+      "semester": "Summer 2025",
+      "courses": [
+        {
+          "courseId": "CSE 2231",
+          "id": null,
+          "title": "Software II: Software Development and Design",
+          "instructor": "Adam Grupa",
+          "startTime": "11:30",
+          "endTime": "12:25",
+          "type": null,
+          "difficultyRating": null,
+          "mode": null,
+          "session": 3931,
+          "repeatDays": [
+            "Thursday",
+            "Friday",
+            "Monday",
+            "Tuesday",
+            "Wednesday"
+          ],
+          "campus": "Columbus",
+          "semester": "Summer 2025",
+          "status": null
+        },
+        {
+          "courseId": "CSE 2321",
+          "id": null,
+          "title": "CSE 2321 - Foundations I: Discrete Structures",
+          "instructor": "Doreen Close",
+          "startTime": "09:35",
+          "endTime": "10:55",
+          "type": "Lecture",
+          "difficultyRating": null,
+          "mode": "Online",
+          "session": 4488,
+          "repeatDays": [
+            "Wednesday",
+            "Thursday",
+            "Tuesday",
+            "Friday"
+          ],
+          "campus": "Columbus",
+          "semester": "Summer 2025",
+          "status": "Open"
+        },
+        {
+          "courseId": "MATH 2568",
+          "id": null,
+          "title": "MATH 2568 - Linear Algebra",
+          "instructor": "Roy Joshua",
+          "startTime": null,
+          "endTime": null,
+          "type": "Lecture",
+          "difficultyRating": null,
+          "mode": "Online",
+          "session": 13236,
+          "repeatDays": [],
+          "campus": "Columbus",
+          "semester": "Summer 2025",
+          "status": "Open"
+        },
+        {
+          "courseId": "STAT 3470",
+          "id": null,
+          "title": null,
+          "instructor": null,
+          "startTime": null,
+          "endTime": null,
+          "type": null,
+          "difficultyRating": null,
+          "mode": null,
+          "session": null,
+          "repeatDays": null,
+          "campus": "Columbus",
+          "semester": "Summer 2025",
+          "status": null
+        }
+      ],
+      "events": [
+        {
+          "id": null,
+          "title": "Lunch",
+          "description": "Time to eat",
+          "startTime": "12:30",
+          "endTime": "13:30",
+          "repeatDays": [
+            "Monday",
+            "Wednesday",
+            "Friday"
+          ],
+          "campus": null,
+          "semester": null
+        },
+        {
+          "id": null,
+          "title": "Morning Workout",
+          "description": "Gym time",
+          "startTime": "08:00",
+          "endTime": "09:00",
+          "repeatDays": [
+            "Tuesday",
+            "Thursday"
+          ],
+          "campus": null,
+          "semester": null
+        }
+      ],
+      "difficultyScore": 0,
+      "weeklyHours": 0,
+      "creditHours": 0,
+      "createdAt": null,
+      "updatedAt": null
+    },
+    {
+      "id": 1,
+      "name": "Option 2",
+      "favorite": false,
+      "campus": "Columbus",
+      "semester": "Summer 2025",
+      "courses": [
+        {
+          "courseId": "CSE 2231",
+          "id": null,
+          "title": "Software II: Software Development and Design",
+          "instructor": "Adam Grupa",
+          "startTime": "11:30",
+          "endTime": "12:25",
+          "type": null,
+          "difficultyRating": null,
+          "mode": null,
+          "session": 3931,
+          "repeatDays": [
+            "Thursday",
+            "Friday",
+            "Monday",
+            "Tuesday",
+            "Wednesday"
+          ],
+          "campus": "Columbus",
+          "semester": "Summer 2025",
+          "status": null
+        },
+        {
+          "courseId": "CSE 2321",
+          "id": null,
+          "title": "CSE 2321 - Foundations I: Discrete Structures",
+          "instructor": "Doreen Close",
+          "startTime": "09:35",
+          "endTime": "10:55",
+          "type": "Lecture",
+          "difficultyRating": null,
+          "mode": "Online",
+          "session": 4488,
+          "repeatDays": [
+            "Wednesday",
+            "Thursday",
+            "Tuesday",
+            "Friday"
+          ],
+          "campus": "Columbus",
+          "semester": "Summer 2025",
+          "status": "Open"
+        },
+        {
+          "courseId": "MATH 2568",
+          "id": null,
+          "title": "MATH 2568 - Linear Algebra",
+          "instructor": "Nate Broaddus",
+          "startTime": null,
+          "endTime": null,
+          "type": "Lecture",
+          "difficultyRating": null,
+          "mode": "Online",
+          "session": 16495,
+          "repeatDays": [],
+          "campus": "Columbus",
+          "semester": "Summer 2025",
+          "status": "Open"
+        },
+        {
+          "courseId": "STAT 3470",
+          "id": null,
+          "title": null,
+          "instructor": null,
+          "startTime": null,
+          "endTime": null,
+          "type": null,
+          "difficultyRating": null,
+          "mode": null,
+          "session": null,
+          "repeatDays": null,
+          "campus": "Columbus",
+          "semester": "Summer 2025",
+          "status": null
+        }
+      ],
+      "events": [
+        {
+          "id": null,
+          "title": "Lunch",
+          "description": "Time to eat",
+          "startTime": "12:30",
+          "endTime": "13:30",
+          "repeatDays": [
+            "Monday",
+            "Wednesday",
+            "Friday"
+          ],
+          "campus": null,
+          "semester": null
+        },
+        {
+          "id": null,
+          "title": "Morning Workout",
+          "description": "Gym time",
+          "startTime": "08:00",
+          "endTime": "09:00",
+          "repeatDays": [
+            "Tuesday",
+            "Thursday"
+          ],
+          "campus": null,
+          "semester": null
+        }
+      ],
+      "difficultyScore": 0,
+      "weeklyHours": 0,
+      "creditHours": 0,
+      "createdAt": null,
+      "updatedAt": null
+    },
+    {
+      "id": 2,
+      "name": "Option 3",
+      "favorite": false,
+      "campus": "Columbus",
+      "semester": "Summer 2025",
+      "courses": [
+        {
+          "courseId": "CSE 2231",
+          "id": null,
+          "title": "Software II: Software Development and Design",
+          "instructor": "Adam Grupa",
+          "startTime": "11:30",
+          "endTime": "12:25",
+          "type": null,
+          "difficultyRating": null,
+          "mode": null,
+          "session": 3931,
+          "repeatDays": [
+            "Thursday",
+            "Friday",
+            "Monday",
+            "Tuesday",
+            "Wednesday"
+          ],
+          "campus": "Columbus",
+          "semester": "Summer 2025",
+          "status": null
+        },
+        {
+          "courseId": "CSE 2321",
+          "id": null,
+          "title": "CSE 2321 - Foundations I: Discrete Structures",
+          "instructor": "Doreen Close",
+          "startTime": "09:35",
+          "endTime": "10:55",
+          "type": "Lecture",
+          "difficultyRating": null,
+          "mode": "Online",
+          "session": 4488,
+          "repeatDays": [
+            "Wednesday",
+            "Thursday",
+            "Tuesday",
+            "Friday"
+          ],
+          "campus": "Columbus",
+          "semester": "Summer 2025",
+          "status": "Open"
+        },
+        {
+          "courseId": "MATH 2568",
+          "id": null,
+          "title": "MATH 2568 - Linear Algebra",
+          "instructor": "Nate Broaddus",
+          "startTime": null,
+          "endTime": null,
+          "type": "Lecture",
+          "difficultyRating": null,
+          "mode": "Online",
+          "session": 17953,
+          "repeatDays": [],
+          "campus": "Columbus",
+          "semester": "Summer 2025",
+          "status": "Open"
+        },
+        {
+          "courseId": "STAT 3470",
+          "id": null,
+          "title": null,
+          "instructor": null,
+          "startTime": null,
+          "endTime": null,
+          "type": null,
+          "difficultyRating": null,
+          "mode": null,
+          "session": null,
+          "repeatDays": null,
+          "campus": "Columbus",
+          "semester": "Summer 2025",
+          "status": null
+        }
+      ],
+      "events": [
+        {
+          "id": null,
+          "title": "Lunch",
+          "description": "Time to eat",
+          "startTime": "12:30",
+          "endTime": "13:30",
+          "repeatDays": [
+            "Monday",
+            "Wednesday",
+            "Friday"
+          ],
+          "campus": null,
+          "semester": null
+        },
+        {
+          "id": null,
+          "title": "Morning Workout",
+          "description": "Gym time",
+          "startTime": "08:00",
+          "endTime": "09:00",
+          "repeatDays": [
+            "Tuesday",
+            "Thursday"
+          ],
+          "campus": null,
+          "semester": null
+        }
+      ],
+      "difficultyScore": 0,
+      "weeklyHours": 0,
+      "creditHours": 0,
+      "createdAt": null,
+      "updatedAt": null
+    }
+  ]
+}

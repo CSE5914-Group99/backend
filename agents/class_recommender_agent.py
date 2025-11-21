@@ -597,7 +597,7 @@ if __name__ == "__main__":
         adjusted_project_intensity=55,
         time_load=18.5,
         adjusted_rigor=70,
-        contraints="Working 15 hours per week",
+        constraints="Working 15 hours per week",
         confidence=0.7
     )
 

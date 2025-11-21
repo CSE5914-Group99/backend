@@ -38,10 +38,11 @@ def _format_times_days(repeat_days: list[str] | None, start_time: str | None, en
     return f"{days_str} {start_time}-{end_time}".strip()
 
 
-async def _ensure_user_exists(user_id: int, session: AsyncSession) -> None:
-    exists = await session.scalar(select(UserORM.id).where(UserORM.id == user_id))
-    if not exists:
+async def _ensure_user_exists(google_uid: str, session: AsyncSession) -> int:
+    user_id = await session.scalar(select(UserORM.id).where(UserORM.google_uid == google_uid))
+    if not user_id:
         raise HTTPException(status_code=404, detail="User not found")
+    return user_id
 
 
 async def _get_or_create_course(course_id: str, session: AsyncSession, teacher_name: str | None = None) -> CourseORM:
@@ -63,21 +64,21 @@ async def _get_or_create_course(course_id: str, session: AsyncSession, teacher_n
 
 
 @schedule_router.get(
-    "/{userId}",
+    "/{google_uid}",
     response_model=list[Schedule],
     summary="Gets all of the user's saved schedules",
 )
 async def get_user_schedules(
-    userId: int, session: AsyncSession = Depends(get_session)
+    google_uid: str, session: AsyncSession = Depends(get_session)
 ):
-    await _ensure_user_exists(userId, session)
+    user_id = await _ensure_user_exists(google_uid, session)
     result = await session.execute(
         select(ScheduleORM)
         .options(
             selectinload(ScheduleORM.detailed_courses),
             selectinload(ScheduleORM.activities),
         )
-        .where(ScheduleORM.user_id == userId)
+        .where(ScheduleORM.user_id == user_id)
         .order_by(ScheduleORM.created_at.desc())
     )
     schedules = result.scalars().all()
@@ -85,21 +86,21 @@ async def get_user_schedules(
 
 
 @schedule_router.get(
-    "/favorite/{userId}",
+    "/favorite/{google_uid}",
     response_model=Schedule | None,
     summary="Gets the user's favorite schedule",
 )
 async def get_favorite_schedule(
-    userId: int, session: AsyncSession = Depends(get_session)
+    google_uid: str, session: AsyncSession = Depends(get_session)
 ):
-    await _ensure_user_exists(userId, session)
+    user_id = await _ensure_user_exists(google_uid, session)
     result = await session.execute(
         select(ScheduleORM)
         .options(
             selectinload(ScheduleORM.detailed_courses),
             selectinload(ScheduleORM.activities),
         )
-        .where(ScheduleORM.user_id == userId, ScheduleORM.is_starred.is_(True))
+        .where(ScheduleORM.user_id == user_id, ScheduleORM.is_starred.is_(True))
         .limit(1)
     )
     schedule = result.scalars().first()
@@ -107,15 +108,15 @@ async def get_favorite_schedule(
 
 
 @schedule_router.post(
-    "/add/{userId}",
+    "/add/{google_uid}",
     response_model=Schedule,
     status_code=status.HTTP_201_CREATED,
     summary="Add a schedule",
 )
 async def add_schedule(
-    userId: int, body: SchedulePayload, session: AsyncSession = Depends(get_session)
+    google_uid: str, body: SchedulePayload, session: AsyncSession = Depends(get_session)
 ):
-    await _ensure_user_exists(userId, session)
+    user_id = await _ensure_user_exists(google_uid, session)
     favorite_flag = body.favorite if body.favorite is not None else False
     
     # Use courses from payload
@@ -154,7 +155,7 @@ async def add_schedule(
 
     # Construct schedule with relationships assigned before adding to session
     schedule = ScheduleORM(
-        user_id=userId,
+        user_id=user_id,
         name=body.name or "Untitled",
         is_starred=favorite_flag,
         campus=body.campus,
@@ -169,7 +170,7 @@ async def add_schedule(
     if favorite_flag:
         await session.execute(
             update(ScheduleORM)
-            .where(ScheduleORM.user_id == userId, ScheduleORM.id != schedule.id)
+            .where(ScheduleORM.user_id == user_id, ScheduleORM.id != schedule.id)
             .values(is_starred=False)
         )
 
@@ -189,24 +190,24 @@ async def add_schedule(
 
 
 @schedule_router.put(
-    "/save/{userId}",
+    "/save/{google_uid}",
     response_model=Schedule,
     summary="Saves (updates) a schedule",
 )
 async def save_schedule(
-    userId: int, body: SchedulePayload, session: AsyncSession = Depends(get_session)
+    google_uid: str, body: SchedulePayload, session: AsyncSession = Depends(get_session)
 ):
     if not body.scheduleId:
         raise HTTPException(status_code=400, detail="scheduleId is required to update")
 
-    await _ensure_user_exists(userId, session)
+    user_id = await _ensure_user_exists(google_uid, session)
     result = await session.execute(
         select(ScheduleORM)
         .options(
             selectinload(ScheduleORM.detailed_courses),
             selectinload(ScheduleORM.activities),
         )
-        .where(ScheduleORM.id == body.scheduleId, ScheduleORM.user_id == userId)
+        .where(ScheduleORM.id == body.scheduleId, ScheduleORM.user_id == user_id)
     )
     schedule = result.scalars().first()
     if not schedule:
@@ -270,7 +271,7 @@ async def save_schedule(
     if schedule.is_starred:
         await session.execute(
             update(ScheduleORM)
-            .where(ScheduleORM.user_id == userId, ScheduleORM.id != schedule.id)
+            .where(ScheduleORM.user_id == user_id, ScheduleORM.id != schedule.id)
             .values(is_starred=False)
         )
 
@@ -280,17 +281,17 @@ async def save_schedule(
 
 
 @schedule_router.delete(
-    "/{userId}/{scheduleId}",
+    "/{google_uid}/{scheduleId}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete a schedule",
 )
 async def delete_schedule(
-    userId: int, scheduleId: int, session: AsyncSession = Depends(get_session)
+    google_uid: str, scheduleId: int, session: AsyncSession = Depends(get_session)
 ):
-    await _ensure_user_exists(userId, session)
+    user_id = await _ensure_user_exists(google_uid, session)
     schedule = await session.scalar(
         select(ScheduleORM).where(
-            ScheduleORM.id == scheduleId, ScheduleORM.user_id == userId
+            ScheduleORM.id == scheduleId, ScheduleORM.user_id == user_id
         )
     )
     if not schedule:

@@ -50,24 +50,11 @@ async def create_user(
 
 
 @users_router.get(
-    "/{userId}",
-    response_model=User,
-    summary="Get a user by ID",
-)
-async def get_user(userId: int, session: AsyncSession = Depends(get_session)):
-    user = await session.get(UserORM, userId)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    return User.model_validate(user)
-
-
-@users_router.get(
-    "/google/{google_uid}",
+    "/{google_uid}",
     response_model=User,
     summary="Get a user by Google UID",
 )
-async def get_user_by_google(google_uid: str, session: AsyncSession = Depends(get_session)):
-    """Fetch a user by their Google UID. Returns 200 with user or 404 if not found."""
+async def get_user(google_uid: str, session: AsyncSession = Depends(get_session)):
     user = await session.scalar(select(UserORM).where(UserORM.google_uid == google_uid))
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -88,14 +75,14 @@ async def user_exists_by_google(google_uid: str, session: AsyncSession = Depends
 
 
 @users_router.put(
-    "/{userId}",
+    "/{google_uid}",
     response_model=User,
-    summary="Update a user by ID",
+    summary="Update a user by Google UID",
 )
 async def update_user(
-    userId: int, payload: UserUpdate, session: AsyncSession = Depends(get_session)
+    google_uid: str, payload: UserUpdate, session: AsyncSession = Depends(get_session)
 ):
-    user = await session.get(UserORM, userId)
+    user = await session.scalar(select(UserORM).where(UserORM.google_uid == google_uid))
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -129,12 +116,12 @@ async def update_user(
 
 
 @users_router.delete(
-    "/{userId}",
+    "/{google_uid}",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="Delete a user by ID",
+    summary="Delete a user by Google UID",
 )
-async def delete_user(userId: int, session: AsyncSession = Depends(get_session)):
-    user = await session.get(UserORM, userId)
+async def delete_user(google_uid: str, session: AsyncSession = Depends(get_session)):
+    user = await session.scalar(select(UserORM).where(UserORM.google_uid == google_uid))
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     await session.delete(user)
