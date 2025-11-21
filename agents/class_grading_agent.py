@@ -153,7 +153,7 @@ class ClassGradingState(TypedDict):
     session: AsyncSession | None  # Database session for caching
 
 # Initialize the ReAct agent with tools
-llm = ChatOpenAI(model="gpt-5-mini", temperature=1)
+llm = ChatOpenAI(model="gpt-4o", temperature=0)
 tools = [
     basic_tavily_search,
     osu_course_search_tool,

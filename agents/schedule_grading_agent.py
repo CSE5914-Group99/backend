@@ -177,7 +177,7 @@ async def score_class_agent_graph(state: ClassGradingState) -> dict:
     }
 
 # Initialize ReAct agent for schedule analysis
-llm = ChatOpenAI(model="gpt-5-mini", temperature=1)
+llm = ChatOpenAI(model="gpt-4o", temperature=0)
 tools = [basic_tavily_search]
 schedule_analysis_agent = create_react_agent(
     model=llm,

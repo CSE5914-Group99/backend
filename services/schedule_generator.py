@@ -358,13 +358,13 @@ async def generate_schedule_options(request: GenerateScheduleRequest) -> Generat
                         LOGGER.warning(f"Invalid day format in event: {day}")
 
         # 2. Generate schedules
-        # We limit to 3 candidates for grading to save time/tokens
+        # We limit to 10 candidates to provide more options
         candidates, missing_courses = await generate_schedules(
             request.courses,
             request.term,
             request.campus,
             events=generator_events,
-            max_schedules=3
+            max_schedules=10
         )
         
         if not candidates and missing_courses:

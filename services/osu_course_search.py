@@ -245,6 +245,13 @@ def _parse_sections(soup: BeautifulSoup, subject: str, course_number: str, campu
             if room and ("online" in room.lower() or "web" in room.lower()):
                 mode = "Online"
 
+            # Filter out sections that are In-person but have no time/days (TBA)
+            # This addresses the user's request to remove sections with "repeat days null & time null & teacher is TBA & mode is in person"
+            # Although the user mentioned "teacher is TBA", the provided example photo showed a teacher but TBA time.
+            # We filter primarily on Time TBA for In-person classes as they are not schedulable.
+            if mode == "In-person" and not start_time and not repeat_days:
+                continue
+
             sections.append(
                 CourseSection(
                     courseId=f"{subject} {course_number}",
@@ -400,7 +407,7 @@ async def fetch_osu_course_sections(
         if institution_value is not None:
             updates[artifacts.institution_select.get("name")] = institution_value
 
-        soup, hidden_fields, _ = await _submit_form_action(
+        soup, hidden_fields, new_artifacts = await _submit_form_action(
             client,
             hidden_fields,
             artifacts,
@@ -408,6 +415,21 @@ async def fetch_osu_course_sections(
             action=_get_element_action_id(artifacts.search_button),
             open_only_flag=open_only,
         )
+
+        if new_artifacts:
+            artifacts = new_artifacts
+
+        # Check for "View All Sections" and click it if found to expand the list
+        view_all_id = _find_view_all_button(soup)
+        if view_all_id:
+            LOGGER.info("Found 'View All' button %s, clicking to expand results", view_all_id)
+            soup, hidden_fields, _ = await _submit_form_action(
+                client,
+                hidden_fields,
+                artifacts,
+                updates={},
+                action=view_all_id,
+            )
 
         result_html = str(soup)
         result_soup = soup
@@ -496,3 +518,12 @@ def _parse_meeting_time(days_times: str | None) -> tuple[str | None, str | None,
         return s_dt.strftime("%H:%M"), e_dt.strftime("%H:%M"), days
         
     return None, None, days
+
+def _find_view_all_button(soup: BeautifulSoup) -> str | None:
+    """Locate the 'View All Sections' button ID if present."""
+    # The ID is typically SSR_CLSRSLT_WRK_VIEW_ALL$0 for the first course group.
+    # We look for an element with an ID starting with this pattern.
+    element = soup.find(id=re.compile(r"^SSR_CLSRSLT_WRK_VIEW_ALL"))
+    if element:
+        return element.get("id")
+    return None
