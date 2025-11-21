@@ -56,6 +56,8 @@ class Schedule(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False, default="Untitled")
     is_starred: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    campus: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    semester: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     # Schedule scoring fields
@@ -79,6 +81,41 @@ class Schedule(Base):
         back_populates="schedule", cascade="all, delete-orphan", lazy="selectin"
     )
 
+    @property
+    def courses(self) -> list[ScheduleCourse]:
+        return self.detailed_courses
+
+    @property
+    def events(self) -> list[ScheduleActivity]:
+        return self.activities
+
+    @property
+    def favorite(self) -> bool:
+        return self.is_starred
+
+    @property
+    def difficultyScore(self) -> float | None:
+        # Map adjusted_difficulty to difficultyScore if needed, or just return None
+        return float(self.adjusted_difficulty) if self.adjusted_difficulty is not None else None
+
+    @property
+    def weeklyHours(self) -> float | None:
+        return self.time_load
+
+    @property
+    def creditHours(self) -> float | None:
+        return float(self.total_credit_hours) if self.total_credit_hours is not None else None
+
+    @property
+    def createdAt(self) -> datetime:
+        return self.created_at
+
+    @property
+    def updatedAt(self) -> datetime | None:
+        # If we don't have updated_at, use created_at
+        return self.created_at
+
+
 
 class Course(Base):
     __tablename__ = "courses"
@@ -97,10 +134,40 @@ class ScheduleActivity(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     schedule_id: Mapped[int] = mapped_column(ForeignKey("schedules.id", ondelete="CASCADE"), nullable=False)
-    description: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False, default="Untitled")
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
     times_days: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    campus: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    semester: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
     schedule: Mapped[Schedule] = relationship(back_populates="activities")
+
+    @property
+    def startTime(self) -> str | None:
+        if not self.times_days:
+            return None
+        import re
+        match = re.search(r'(\d{1,2}:\d{2})-(\d{1,2}:\d{2})', self.times_days)
+        return match.group(1) if match else None
+
+    @property
+    def endTime(self) -> str | None:
+        if not self.times_days:
+            return None
+        import re
+        match = re.search(r'(\d{1,2}:\d{2})-(\d{1,2}:\d{2})', self.times_days)
+        return match.group(2) if match else None
+
+    @property
+    def repeatDays(self) -> list[str]:
+        if not self.times_days:
+            return []
+        days = []
+        for day in ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']:
+            if day in self.times_days:
+                days.append(day)
+        return days
+
 
 
 class ScheduleCourseLink(Base):
@@ -129,5 +196,48 @@ class ScheduleCourse(Base):
     teacher_name: Mapped[str] = mapped_column(String(255), nullable=False, default="unknown")
     section_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
     times_days: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    campus: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    semester: Mapped[str | None] = mapped_column(String(100), nullable=True)
     # Relationship back to parent schedule for automatic schedule_id assignment
     schedule: Mapped[Schedule] = relationship(back_populates="detailed_courses")
+
+    @property
+    def courseId(self) -> str:
+        return self.course_id
+
+    @property
+    def title(self) -> str:
+        # For now, use course_id as title if we don't have a separate title field
+        return self.course_id
+
+    @property
+    def instructor(self) -> str:
+        return self.teacher_name
+
+    @property
+    def startTime(self) -> str | None:
+        if not self.times_days:
+            return None
+        import re
+        match = re.search(r'(\d{1,2}:\d{2})-(\d{1,2}:\d{2})', self.times_days)
+        return match.group(1) if match else None
+
+    @property
+    def endTime(self) -> str | None:
+        if not self.times_days:
+            return None
+        import re
+        match = re.search(r'(\d{1,2}:\d{2})-(\d{1,2}:\d{2})', self.times_days)
+        return match.group(2) if match else None
+
+    @property
+    def repeatDays(self) -> list[str]:
+        if not self.times_days:
+            return []
+        days = []
+        # Simple check for day names
+        for day in ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']:
+            if day in self.times_days:
+                days.append(day)
+        return days
+

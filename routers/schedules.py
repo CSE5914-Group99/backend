@@ -14,10 +14,8 @@ from db import (
     get_session,
 )
 from schemas import (
-    ScheduleActivity,
-    ScheduleCourseDetail,
+    Schedule,
     SchedulePayload,
-    ScheduleSaved,
 )
 
 schedule_router = APIRouter(prefix="/schedule", tags=["schedule"])
@@ -33,26 +31,11 @@ def _compute_difficulty(schedule: ScheduleORM) -> float:
         return 0.0
 
 
-def _map_schedule(schedule: ScheduleORM) -> ScheduleSaved:
-    return ScheduleSaved(
-        scheduleId=schedule.id,
-        userId=schedule.user_id,
-        name=schedule.name,
-        favorite=schedule.is_starred,
-        difficultyScore=_compute_difficulty(schedule),
-        items=[
-            ScheduleCourseDetail(
-                courseId=item.course_id,
-                sectionId=item.section_id,
-                timesDays=item.times_days,
-            )
-            for item in schedule.detailed_courses
-        ],
-        activities=[
-            ScheduleActivity(description=activity.description, timesDays=activity.times_days)
-            for activity in schedule.activities
-        ],
-    )
+def _format_times_days(repeat_days: list[str] | None, start_time: str | None, end_time: str | None) -> str | None:
+    if not start_time or not end_time:
+        return None
+    days_str = ", ".join(repeat_days) if repeat_days else ""
+    return f"{days_str} {start_time}-{end_time}".strip()
 
 
 async def _ensure_user_exists(user_id: int, session: AsyncSession) -> None:
@@ -81,7 +64,7 @@ async def _get_or_create_course(course_id: str, session: AsyncSession, teacher_n
 
 @schedule_router.get(
     "/{userId}",
-    response_model=list[ScheduleSaved],
+    response_model=list[Schedule],
     summary="Gets all of the user's saved schedules",
 )
 async def get_user_schedules(
@@ -98,12 +81,12 @@ async def get_user_schedules(
         .order_by(ScheduleORM.created_at.desc())
     )
     schedules = result.scalars().all()
-    return [_map_schedule(schedule) for schedule in schedules]
+    return schedules
 
 
 @schedule_router.get(
     "/favorite/{userId}",
-    response_model=ScheduleSaved | None,
+    response_model=Schedule | None,
     summary="Gets the user's favorite schedule",
 )
 async def get_favorite_schedule(
@@ -120,14 +103,12 @@ async def get_favorite_schedule(
         .limit(1)
     )
     schedule = result.scalars().first()
-    if not schedule:
-        return None
-    return _map_schedule(schedule)
+    return schedule
 
 
 @schedule_router.post(
     "/add/{userId}",
-    response_model=ScheduleSaved,
+    response_model=Schedule,
     status_code=status.HTTP_201_CREATED,
     summary="Add a schedule",
 )
@@ -136,11 +117,13 @@ async def add_schedule(
 ):
     await _ensure_user_exists(userId, session)
     favorite_flag = body.favorite if body.favorite is not None else False
-    # Resolve courses up front (awaits before building children to avoid later lazy loads)
-    items_payload = body.items or []
+    
+    # Use courses from payload
+    courses_payload = body.courses or []
+    
     pre_resolved: list[tuple[str, str]] = []  # (course_id, teacher_name)
-    for item in items_payload:
-        teacher_name = getattr(item, "teacherName", None) or "unknown"
+    for item in courses_payload:
+        teacher_name = item.instructor or "unknown"
         await _get_or_create_course(item.courseId, session, teacher_name)
         pre_resolved.append((item.courseId, teacher_name))
 
@@ -149,19 +132,24 @@ async def add_schedule(
         ScheduleCourseORM(
             course_id=cid,
             teacher_name=tname,
-            section_id=item.sectionId,
-            times_days=item.timesDays,
+            section_id=str(item.session) if item.session else None,
+            times_days=_format_times_days(item.repeatDays, item.startTime, item.endTime),
+            campus=item.campus,
+            semester=item.semester,
         )
-        for (cid, tname), item in zip(pre_resolved, items_payload)
+        for (cid, tname), item in zip(pre_resolved, courses_payload)
     ]
 
-    activities_payload = body.activities or []
+    events_payload = body.events or []
     activities: list[ScheduleActivityORM] = [
         ScheduleActivityORM(
-            description=activity.description,
-            times_days=activity.timesDays,
+            title=event.title,
+            description=event.description,
+            times_days=_format_times_days(event.repeatDays, event.startTime, event.endTime),
+            campus=event.campus,
+            semester=event.semester,
         )
-        for activity in activities_payload
+        for event in events_payload
     ]
 
     # Construct schedule with relationships assigned before adding to session
@@ -169,6 +157,8 @@ async def add_schedule(
         user_id=userId,
         name=body.name or "Untitled",
         is_starred=favorite_flag,
+        campus=body.campus,
+        semester=body.semester,
         detailed_courses=detailed_courses,
         activities=activities,
     )
@@ -195,12 +185,12 @@ async def add_schedule(
         .where(ScheduleORM.id == schedule.id)
     )
     schedule_loaded = result.scalars().first()
-    return _map_schedule(schedule_loaded or schedule)
+    return schedule_loaded or schedule
 
 
 @schedule_router.put(
     "/save/{userId}",
-    response_model=ScheduleSaved,
+    response_model=Schedule,
     summary="Saves (updates) a schedule",
 )
 async def save_schedule(
@@ -224,20 +214,28 @@ async def save_schedule(
 
     if body.name:
         schedule.name = body.name
+    
+    if body.campus:
+        schedule.campus = body.campus
+    
+    if body.semester:
+        schedule.semester = body.semester
 
-    if body.items is not None:
+    if body.courses is not None:
         # Resolve courses first
         resolved_items: list[ScheduleCourseORM] = []
-        for item in body.items:
-            teacher_name = getattr(item, "teacherName", None) or "unknown"
+        for item in body.courses:
+            teacher_name = item.instructor or "unknown"
             await _get_or_create_course(item.courseId, session, teacher_name)
             resolved_items.append(
                 ScheduleCourseORM(
                     schedule_id=schedule.id,
                     course_id=item.courseId,
                     teacher_name=teacher_name,
-                    section_id=item.sectionId,
-                    times_days=item.timesDays,
+                    section_id=str(item.session) if item.session else None,
+                    times_days=_format_times_days(item.repeatDays, item.startTime, item.endTime),
+                    campus=item.campus,
+                    semester=item.semester,
                 )
             )
 
@@ -247,7 +245,7 @@ async def save_schedule(
         )
         session.add_all(resolved_items)
 
-    if body.activities is not None:
+    if body.events is not None:
         # Replace activities via direct table ops
         await session.execute(
             delete(ScheduleActivityORM).where(ScheduleActivityORM.schedule_id == schedule.id)
@@ -256,10 +254,13 @@ async def save_schedule(
             [
                 ScheduleActivityORM(
                     schedule_id=schedule.id,
-                    description=activity.description,
-                    times_days=activity.timesDays,
+                    title=event.title,
+                    description=event.description,
+                    times_days=_format_times_days(event.repeatDays, event.startTime, event.endTime),
+                    campus=event.campus,
+                    semester=event.semester,
                 )
-                for activity in body.activities
+                for event in body.events
             ]
         )
 
@@ -275,7 +276,7 @@ async def save_schedule(
 
     await session.commit()
     await session.refresh(schedule)
-    return _map_schedule(schedule)
+    return schedule
 
 
 @schedule_router.delete(

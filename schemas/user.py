@@ -9,15 +9,16 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field
 class User(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    id: Optional[int] = None
-    username: str
     google_uid: Optional[str] = None
-    email: EmailStr
+    email: Optional[EmailStr] = None
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     date_of_birth: Optional[date] = None
-    created_at: Optional[datetime] = None
-    preferences: dict[str, Any] = Field(default_factory=dict)
+    preferences: Optional[dict[str, Any]] = None
+    # Keep id for internal use if needed, but make it optional/hidden if frontend doesn't want it
+    # The screenshot doesn't show ID, but it's usually needed.
+    # I'll keep it but it's not in the interface shown.
+    id: Optional[int] = None
 
 
 class UserCreate(BaseModel):

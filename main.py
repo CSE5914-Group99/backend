@@ -10,6 +10,7 @@ from routers import (
     reddit_router,
     schedule_router,
     users_router,
+    generate_schedule_router,
 )
 from config import settings
 from db import Base, init_models
@@ -48,6 +49,7 @@ async def health_check():
 app.include_router(users_router)
 app.include_router(courses_router)
 app.include_router(schedule_router)
+app.include_router(generate_schedule_router)
 app.include_router(course_search_router)
 app.include_router(rate_my_professor_router)
 app.include_router(reddit_router)

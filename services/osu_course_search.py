@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from datetime import datetime
 from dataclasses import dataclass
 from typing import Mapping, MutableMapping
 
@@ -41,15 +42,20 @@ class CourseSearchError(RuntimeError):
 class CourseSection(BaseModel):
     """Structured representation of an individual course section."""
 
-    course_title: str | None = Field(None, description="Course title shown in the results group header")
-    class_number: str | None = Field(None, description="PeopleSoft class number")
-    section: str | None = Field(None, description="Section code and session, e.g. 0010-LEC")
-    days_times: str | None = Field(None, description="Meeting pattern such as MoWe 10:00 - 11:15")
-    room: str | None = Field(None, description="Assigned room/location")
+    id: str | None = None
+    title: str | None = Field(None, description="Course title shown in the results group header")
+    courseId: str | None = Field(None, description="Course ID, e.g. 'CSE 2231'")
     instructor: str | None = Field(None, description="Primary instructor name")
-    meeting_dates: str | None = Field(None, description="Start/end dates for the meeting")
+    startTime: str | None = Field(None, description="Start time in HH:mm (24h) format")
+    endTime: str | None = Field(None, description="End time in HH:mm (24h) format")
+    type: str | None = Field(None, description="Component type e.g. Lecture, Lab")
+    difficultyRating: float | None = None
+    mode: str | None = Field(None, description="Instruction mode e.g. In-person, Online")
+    session: int | None = Field(None, description="PeopleSoft class number (unique ID)")
     status: str | None = Field(None, description="Enrollment status derived from icon alt text")
-    notes: str | None = Field(None, description="Additional notes appended below the section")
+    repeatDays: list[str] | None = Field(None, description="List of days, e.g. ['Monday', 'Wednesday']")
+    campus: str | None = None
+    semester: str | None = None
 
 
 class CourseSearchResponse(BaseModel):
@@ -160,7 +166,7 @@ def _update_checkbox_payload(
         payload[checkbox_name] = value
 
 
-def _parse_sections(soup: BeautifulSoup) -> list[CourseSection]:
+def _parse_sections(soup: BeautifulSoup, subject: str, course_number: str, campus: str, semester: str) -> list[CourseSection]:
     sections: list[CourseSection] = []
     course_group_selector = "div[id^='win0divSSR_CLSRSLT_WRK_GROUPBOX2$']"
 
@@ -169,11 +175,15 @@ def _parse_sections(soup: BeautifulSoup) -> list[CourseSection]:
         course_title = _clean_text(title_element.get_text(" ", strip=True)) if title_element else None
 
         for section_block in group.select("div[id^='win0divSSR_CLSRSLT_WRK_GROUPBOX3$']"):
-            class_number = _clean_text(
+            class_number_str = _clean_text(
                 getattr(section_block.select_one("span[id^='MTG_CLASS_NBR']"), "get_text", lambda **_: "")(
                     strip=True
                 )
             )
+            session_id = None
+            if class_number_str and class_number_str.isdigit():
+                session_id = int(class_number_str)
+
             section_text = _clean_text(
                 getattr(section_block.select_one("span[id^='MTG_CLASSNAME']"), "get_text", lambda **_: "")(
                     strip=True
@@ -205,28 +215,50 @@ def _parse_sections(soup: BeautifulSoup) -> list[CourseSection]:
             )
             status = _clean_text(status_icon.get("alt")) if status_icon else None
 
-            notes_block = section_block.select_one("div[id^='win0divDERIVED_CLSRCH_DESCRLONG']")
-            if not notes_block:
-                notes_block = section_block.find_next(
-                    "div", id=re.compile(r"DERIVED_CLSRCH_DESCRLONG")
-                )
-            notes = _clean_text(notes_block.get_text(strip=True)) if notes_block else None
+            # notes_block = section_block.select_one("div[id^='win0divDERIVED_CLSRCH_DESCRLONG']")
+            # if not notes_block:
+            #     notes_block = section_block.find_next(
+            #         "div", id=re.compile(r"DERIVED_CLSRCH_DESCRLONG")
+            #     )
+            # notes = _clean_text(notes_block.get_text(strip=True)) if notes_block else None
+            # if notes and notes.startswith("Notes:"):
+            #     notes = notes[6:].strip()
+
+            start_time, end_time, repeat_days = _parse_meeting_time(days_times)
 
             # Filter out empty rows that are used for layout padding
-            if not any([class_number, section_text, days_times, room, instructor, meeting_dates]):
+            if not any([class_number_str, section_text, days_times, room, instructor, meeting_dates]):
                 continue
+
+            # Determine type
+            course_type = "Lecture"
+            if section_text:
+                if "LAB" in section_text:
+                    course_type = "Lab"
+                elif "REC" in section_text:
+                    course_type = "Recitation"
+                elif "SEM" in section_text:
+                    course_type = "Seminar"
+            
+            # Determine mode
+            mode = "In-person"
+            if room and ("online" in room.lower() or "web" in room.lower()):
+                mode = "Online"
 
             sections.append(
                 CourseSection(
-                    course_title=course_title,
-                    class_number=class_number,
-                    section=section_text,
-                    days_times=days_times,
-                    room=room,
+                    courseId=f"{subject} {course_number}",
+                    title=course_title,
+                    session=session_id,
                     instructor=instructor,
-                    meeting_dates=meeting_dates,
+                    startTime=start_time,
+                    endTime=end_time,
+                    repeatDays=repeat_days,
+                    type=course_type,
+                    mode=mode,
                     status=status,
-                    notes=notes,
+                    campus=campus,
+                    semester=semester
                 )
             )
 
@@ -395,7 +427,7 @@ async def fetch_osu_course_sections(
                     raw_html=result_html if include_raw_html else None,
                 )
 
-        sections = _parse_sections(result_soup)
+        sections = _parse_sections(result_soup, subject, course_number, campus, term)
 
         return CourseSearchResponse(
             subject=subject,
@@ -413,3 +445,53 @@ def fetch_osu_course_sections_sync(*args, **kwargs) -> CourseSearchResponse:
     """Synchronous convenience wrapper for non-async contexts."""
 
     return asyncio.run(fetch_osu_course_sections(*args, **kwargs))
+
+def _parse_meeting_time(days_times: str | None) -> tuple[str | None, str | None, list[str] | None]:
+    if not days_times or days_times == "TBA":
+        return None, None, None
+    
+    match = re.search(r'(\d{1,2}:\d{2}(?:[AP]M)?)\s*-\s*(\d{1,2}:\d{2}(?:[AP]M)?)', days_times)
+    if not match:
+        return None, None, None
+
+    start_str = match.group(1)
+    end_str = match.group(2)
+    
+    days_part = days_times[:match.start()].strip()
+    days_map = {
+        "Mo": "Monday", "Tu": "Tuesday", "We": "Wednesday", 
+        "Th": "Thursday", "Fr": "Friday", "Sa": "Saturday", "Su": "Sunday"
+    }
+    days = []
+    i = 0
+    while i < len(days_part):
+        chunk = days_part[i:i+2]
+        if chunk in days_map:
+            days.append(days_map[chunk])
+            i += 2
+        else:
+            i += 1
+            
+    def normalize_time(t_str):
+        try:
+            dt = datetime.strptime(t_str, "%I:%M%p")
+            return dt
+        except ValueError:
+            pass
+        try:
+            dt = datetime.strptime(t_str, "%H:%M")
+            if dt.hour < 7:
+                dt = dt.replace(hour=dt.hour + 12)
+            return dt
+        except ValueError:
+            return None
+
+    s_dt = normalize_time(start_str)
+    e_dt = normalize_time(end_str)
+    
+    if s_dt and e_dt:
+        if e_dt < s_dt:
+             e_dt = e_dt.replace(hour=e_dt.hour + 12)
+        return s_dt.strftime("%H:%M"), e_dt.strftime("%H:%M"), days
+        
+    return None, None, days
