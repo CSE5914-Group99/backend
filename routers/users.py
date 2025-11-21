@@ -29,21 +29,18 @@ async def create_user(
             return User.model_validate(existing_by_google)
 
     existing = await session.scalar(
-        select(UserORM).where(
-            or_(UserORM.username == user.username, UserORM.email == user.email)
-        )
+        select(UserORM).where(UserORM.email == user.email)
     )
     if existing:
         raise HTTPException(status_code=409, detail="User already exists")
 
     db_user = UserORM(
-        username=user.username,
         email=user.email,
         google_uid=user.google_uid,
         first_name=user.first_name,
         last_name=user.last_name,
         date_of_birth=user.date_of_birth,
-        preferences=user.preferences or {},
+        preferences=user.preferences or "",
     )
     session.add(db_user)
     await session.flush()
@@ -101,14 +98,6 @@ async def update_user(
     user = await session.get(UserORM, userId)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-
-    if payload.username and payload.username != user.username:
-        exists = await session.scalar(
-            select(UserORM).where(UserORM.username == payload.username)
-        )
-        if exists:
-            raise HTTPException(status_code=409, detail="Username already in use")
-        user.username = payload.username
 
     if payload.email and payload.email != user.email:
         exists = await session.scalar(select(UserORM).where(UserORM.email == payload.email))

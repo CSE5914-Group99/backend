@@ -14,31 +14,25 @@ class User(BaseModel):
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     date_of_birth: Optional[date] = None
-    preferences: Optional[dict[str, Any]] = None
-    # Keep id for internal use if needed, but make it optional/hidden if frontend doesn't want it
-    # The screenshot doesn't show ID, but it's usually needed.
-    # I'll keep it but it's not in the interface shown.
-    id: Optional[int] = None
+    preferences: Optional[str] = None
 
 
 class UserCreate(BaseModel):
-    username: str
     email: EmailStr
     google_uid: Optional[str] = None
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     date_of_birth: Optional[date] = None
-    preferences: dict[str, Any] = Field(default_factory=dict)
+    preferences: str
 
 
 class UserUpdate(BaseModel):
-    username: Optional[str] = None
     email: Optional[EmailStr] = None
     google_uid: Optional[str] = None
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     date_of_birth: Optional[date] = None
-    preferences: Optional[dict[str, Any]] = None
+    preferences: Optional[str] = None
 
 
 class UserExists(BaseModel):
@@ -47,7 +41,7 @@ class UserExists(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    username_or_email: str
+    email: EmailStr
     password: Optional[str] = None
 
 
