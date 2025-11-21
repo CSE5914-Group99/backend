@@ -8,13 +8,14 @@ from sqlalchemy.orm import selectinload
 from db import (
     Schedule as ScheduleORM,
     ScheduleActivity as ScheduleActivityORM,
-    ScheduleCourse as ScheduleCourseORM,
+    Course as CourseORM,
     User as UserORM,
     get_session,
 )
 from schemas import (
     Schedule,
     SchedulePayload,
+    Course as CourseSchema,
 )
 
 schedule_router = APIRouter(prefix="/schedule", tags=["schedule"])
@@ -25,7 +26,7 @@ def _compute_difficulty(schedule: ScheduleORM) -> float:
     Simple heuristic: number of items; adjust as needed.
     """
     try:
-        return float(len(schedule.detailed_courses or []))
+        return float(len(schedule.section_ids or []))
     except Exception:
         return 0.0
 
@@ -44,6 +45,76 @@ async def _ensure_user_exists(google_uid: str, session: AsyncSession) -> str:
     return user_uid
 
 
+async def _upsert_courses(courses_payload: list[CourseSchema], session: AsyncSession) -> list[str]:
+    """Upsert courses into the shared Course table and return their IDs."""
+    course_ids = []
+    for item in courses_payload:
+        # Determine ID: Section ID (if number) or Course ID (if string)
+        # Logic: if session is present, use it as ID. Else use courseId.
+        # Wait, user said: "if the string is a full integer(number) then it is a secion if iit is a string then it is a course with no section"
+        # So we should check item.session first.
+        
+        if item.session:
+            c_id = str(item.session)
+        else:
+            c_id = item.courseId
+            
+        course_ids.append(c_id)
+
+        # Check if course exists
+        existing = await session.get(CourseORM, c_id)
+        if existing:
+            # Update fields if needed (optional, but good for keeping data fresh)
+            existing.title = item.title or existing.title
+            existing.teacher_name = item.instructor or existing.teacher_name
+            existing.times_days = _format_times_days(item.repeatDays, item.startTime, item.endTime)
+            existing.campus = item.campus or existing.campus
+            existing.semester = item.semester or existing.semester
+            existing.type = item.type or existing.type
+            existing.difficulty_rating = item.difficultyRating or existing.difficulty_rating
+            existing.mode = item.mode or existing.mode
+            existing.status = item.status or existing.status
+            if item.ratingDetails:
+                existing.rating_details = item.ratingDetails
+        else:
+            # Create new
+            new_course = CourseORM(
+                id=c_id,
+                course_id=item.courseId,
+                title=item.title or "Untitled Course",
+                teacher_name=item.instructor or "unknown",
+                section_id=str(item.session) if item.session else None,
+                times_days=_format_times_days(item.repeatDays, item.startTime, item.endTime),
+                campus=item.campus,
+                semester=item.semester,
+                type=item.type,
+                difficulty_rating=item.difficultyRating,
+                mode=item.mode,
+                status=item.status,
+                rating_details=item.ratingDetails,
+            )
+            session.add(new_course)
+    
+    await session.flush()
+    return course_ids
+
+
+async def _attach_courses_to_schedules(schedules: list[ScheduleORM], session: AsyncSession):
+    """Manually populate the .courses property for a list of schedules."""
+    for schedule in schedules:
+        if not schedule.section_ids:
+            schedule.courses = []
+            continue
+        
+        # Fetch all courses for this schedule
+        # We can optimize this to fetch all needed courses in one query if needed, 
+        # but for now per-schedule fetch is simpler.
+        result = await session.execute(
+            select(CourseORM).where(CourseORM.id.in_(schedule.section_ids))
+        )
+        schedule.courses = result.scalars().all()
+
+
 @schedule_router.get(
     "/{google_uid}",
     response_model=list[Schedule],
@@ -56,13 +127,16 @@ async def get_user_schedules(
     result = await session.execute(
         select(ScheduleORM)
         .options(
-            selectinload(ScheduleORM.detailed_courses),
             selectinload(ScheduleORM.activities),
         )
         .where(ScheduleORM.user_id == user_id)
         .order_by(ScheduleORM.created_at.desc())
     )
     schedules = result.scalars().all()
+    
+    # Populate courses manually
+    await _attach_courses_to_schedules(schedules, session)
+    
     return schedules
 
 
@@ -78,13 +152,16 @@ async def get_favorite_schedule(
     result = await session.execute(
         select(ScheduleORM)
         .options(
-            selectinload(ScheduleORM.detailed_courses),
             selectinload(ScheduleORM.activities),
         )
         .where(ScheduleORM.user_id == user_id, ScheduleORM.is_starred.is_(True))
         .limit(1)
     )
     schedule = result.scalars().first()
+    
+    if schedule:
+        await _attach_courses_to_schedules([schedule], session)
+        
     return schedule
 
 
@@ -100,25 +177,9 @@ async def add_schedule(
     user_id = await _ensure_user_exists(google_uid, session)
     favorite_flag = body.favorite if body.favorite is not None else False
     
-    # Build child objects fully in-memory
+    # Upsert courses and get IDs
     courses_payload = body.courses or []
-    detailed_courses: list[ScheduleCourseORM] = [
-        ScheduleCourseORM(
-            course_id=item.courseId,
-            teacher_name=item.instructor or "unknown",
-            title=item.title or "Untitled Course",
-            section_id=str(item.session) if item.session else None,
-            times_days=_format_times_days(item.repeatDays, item.startTime, item.endTime),
-            campus=item.campus,
-            semester=item.semester,
-            type=item.type,
-            difficulty_rating=item.difficultyRating,
-            mode=item.mode,
-            status=item.status,
-            rating_details=item.ratingDetails,
-        )
-        for item in courses_payload
-    ]
+    section_ids = await _upsert_courses(courses_payload, session)
 
     events_payload = body.events or []
     activities: list[ScheduleActivityORM] = [
@@ -132,14 +193,14 @@ async def add_schedule(
         for event in events_payload
     ]
 
-    # Construct schedule with relationships assigned before adding to session
+    # Construct schedule
     schedule = ScheduleORM(
         user_id=user_id,
         name=body.name or "Untitled",
         is_starred=favorite_flag,
         campus=body.campus,
         semester=body.semester,
-        detailed_courses=detailed_courses,
+        section_ids=section_ids,
         activities=activities,
     )
 
@@ -155,16 +216,18 @@ async def add_schedule(
 
     await session.commit()
 
-    # Re-load eagerly to build response without lazy loads
+    # Re-load and attach courses
     result = await session.execute(
         select(ScheduleORM)
         .options(
-            selectinload(ScheduleORM.detailed_courses),
             selectinload(ScheduleORM.activities),
         )
         .where(ScheduleORM.id == schedule.id)
     )
     schedule_loaded = result.scalars().first()
+    if schedule_loaded:
+        await _attach_courses_to_schedules([schedule_loaded], session)
+        
     return schedule_loaded or schedule
 
 
@@ -176,17 +239,17 @@ async def add_schedule(
 async def save_schedule(
     google_uid: str, body: SchedulePayload, session: AsyncSession = Depends(get_session)
 ):
-    if not body.scheduleId:
+    schedule_id = body.scheduleId or body.id
+    if not schedule_id:
         raise HTTPException(status_code=400, detail="scheduleId is required to update")
 
     user_id = await _ensure_user_exists(google_uid, session)
     result = await session.execute(
         select(ScheduleORM)
         .options(
-            selectinload(ScheduleORM.detailed_courses),
             selectinload(ScheduleORM.activities),
         )
-        .where(ScheduleORM.id == body.scheduleId, ScheduleORM.user_id == user_id)
+        .where(ScheduleORM.id == schedule_id, ScheduleORM.user_id == user_id)
     )
     schedule = result.scalars().first()
     if not schedule:
@@ -202,30 +265,9 @@ async def save_schedule(
         schedule.semester = body.semester
 
     if body.courses is not None:
-        # Replace children via direct table ops to avoid lazy-loading collections
-        await session.execute(
-            delete(ScheduleCourseORM).where(ScheduleCourseORM.schedule_id == schedule.id)
-        )
-        
-        new_courses = [
-            ScheduleCourseORM(
-                schedule_id=schedule.id,
-                course_id=item.courseId,
-                teacher_name=item.instructor or "unknown",
-                title=item.title or "Untitled Course",
-                section_id=str(item.session) if item.session else None,
-                times_days=_format_times_days(item.repeatDays, item.startTime, item.endTime),
-                campus=item.campus,
-                semester=item.semester,
-                type=item.type,
-                difficulty_rating=item.difficultyRating,
-                mode=item.mode,
-                status=item.status,
-                rating_details=item.ratingDetails,
-            )
-            for item in body.courses
-        ]
-        session.add_all(new_courses)
+        # Upsert courses and update IDs list
+        section_ids = await _upsert_courses(body.courses, session)
+        schedule.section_ids = section_ids
 
     if body.events is not None:
         # Replace activities via direct table ops
@@ -258,6 +300,10 @@ async def save_schedule(
 
     await session.commit()
     await session.refresh(schedule)
+    
+    # Attach courses for response
+    await _attach_courses_to_schedules([schedule], session)
+    
     return schedule
 
 
@@ -294,7 +340,6 @@ async def get_schedule(
     result = await session.execute(
         select(ScheduleORM)
         .options(
-            selectinload(ScheduleORM.detailed_courses),
             selectinload(ScheduleORM.activities),
         )
         .where(ScheduleORM.id == scheduleId, ScheduleORM.user_id == user_id)
@@ -302,4 +347,7 @@ async def get_schedule(
     schedule = result.scalars().first()
     if not schedule:
         raise HTTPException(status_code=404, detail="Schedule not found")
+    
+    await _attach_courses_to_schedules([schedule], session)
+    
     return schedule

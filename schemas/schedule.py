@@ -13,7 +13,7 @@ class Course(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     courseId: str
-    id: Optional[int] = None
+    id: Optional[str | int] = None  # Changed to allow string IDs (e.g. "CSE 2221")
     title: Optional[str] = None
     instructor: Optional[str] = None
     startTime: Optional[str] = None  # HH:mm format
@@ -76,6 +76,7 @@ class Schedule(BaseModel):
 
 class SchedulePayload(BaseModel):
     scheduleId: Optional[int] = None
+    id: Optional[int] = None  # Alias for scheduleId to support frontend sending 'id'
     name: str
     favorite: bool
     campus: Optional[str] = None

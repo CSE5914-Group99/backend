@@ -168,11 +168,11 @@ agent = create_react_agent(
 )
 
 from sqlalchemy import select
-from db.models import ScheduleCourse
+from db.models import Course
 
 # Node 1: Check cache for class info
 async def check_cache(state: ClassGradingState) -> ClassGradingState:
-    """Check if class information is already cached in the database (ScheduleCourse table)"""
+    """Check if class information is already cached in the database (Course table)"""
     session = state.get("session")
     class_name = state.get("class_name")
     teacher_name = state.get("teacher_name")
@@ -181,11 +181,11 @@ async def check_cache(state: ClassGradingState) -> ClassGradingState:
         return {"cached": False, "class_score": None}
 
     try:
-        # Query ScheduleCourse for any entry with matching course_id and teacher_name that has rating_details
-        stmt = select(ScheduleCourse.rating_details).where(
-            ScheduleCourse.course_id == class_name,
-            ScheduleCourse.teacher_name == teacher_name,
-            ScheduleCourse.rating_details.is_not(None)
+        # Query Course for any entry with matching course_id and teacher_name that has rating_details
+        stmt = select(Course.rating_details).where(
+            Course.course_id == class_name,
+            Course.teacher_name == teacher_name,
+            Course.rating_details.is_not(None)
         ).limit(1)
         
         result = await session.execute(stmt)
