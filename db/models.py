@@ -58,14 +58,12 @@ class Schedule(Base):
     # Schedule scoring fields
     total_credit_hours: Mapped[int | None] = mapped_column(Integer, nullable=True)
     num_classes: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
-    adjusted_difficulty: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    adjusted_assessment_intensity: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    adjusted_project_intensity: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    time_load: Mapped[float | None] = mapped_column(Float, nullable=True)
-    adjusted_rigor: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    constraints: Mapped[str | None] = mapped_column(Text, nullable=True)
-    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    difficulty_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    
+    # JSON column for detailed grading analysis
+    # Contains: summary, adjusted_difficulty, adjusted_assessment_intensity, 
+    # adjusted_project_intensity, time_load, adjusted_rigor, constraints, confidence
+    grading_details: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     user: Mapped[User] = relationship(back_populates="schedules")
     activities: Mapped[list[ScheduleActivity]] = relationship(
@@ -98,12 +96,17 @@ class Schedule(Base):
 
     @property
     def difficultyScore(self) -> float | None:
-        # Map adjusted_difficulty to difficultyScore if needed, or just return None
-        return float(self.adjusted_difficulty) if self.adjusted_difficulty is not None else None
+        if self.difficulty_score is not None:
+            return self.difficulty_score
+        if self.grading_details:
+            return float(self.grading_details.get('adjusted_difficulty', 0))
+        return None
 
     @property
     def weeklyHours(self) -> float | None:
-        return self.time_load
+        if self.grading_details:
+            return float(self.grading_details.get('time_load', 0))
+        return None
 
     @property
     def creditHours(self) -> float | None:

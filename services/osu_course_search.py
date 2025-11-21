@@ -450,7 +450,7 @@ def _parse_meeting_time(days_times: str | None) -> tuple[str | None, str | None,
     if not days_times or days_times == "TBA":
         return None, None, None
     
-    match = re.search(r'(\d{1,2}:\d{2}(?:[AP]M)?)\s*-\s*(\d{1,2}:\d{2}(?:[AP]M)?)', days_times)
+    match = re.search(r'(\d{1,2}:\d{2}(?:[AP]M)?)\s*-\s*(\d{1,2}:\d{2}(?:[AP]M)?)', days_times, re.IGNORECASE)
     if not match:
         return None, None, None
 
@@ -473,6 +473,7 @@ def _parse_meeting_time(days_times: str | None) -> tuple[str | None, str | None,
             i += 1
             
     def normalize_time(t_str):
+        t_str = t_str.upper()
         try:
             dt = datetime.strptime(t_str, "%I:%M%p")
             return dt

@@ -1,10 +1,13 @@
 import asyncio
 import re
+import logging
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Tuple
 from pydantic import BaseModel
 
 from services.osu_course_search import fetch_osu_course_sections, CourseSection
+
+LOGGER = logging.getLogger(__name__)
 
 class TimeSlot(BaseModel):
     day: str
@@ -108,7 +111,11 @@ def parse_days_times(days_times: str) -> List[TimeSlot]:
             
     return slots
 
-from schemas.schedule import Course
+from schemas.schedule import (
+    Course, Schedule, Event, 
+    GenerateScheduleRequest, GenerateScheduleResponse, AnalyzeSchedulesRequest
+)
+from agents.schedule_grading_agent import schedule_grading_graph, ClassTeacherTuple, ScheduleScore
 
 async def generate_schedules(
     courses: List[Course],
@@ -122,6 +129,7 @@ async def generate_schedules(
     Handles both fixed (pre-selected) courses and variable courses.
     Returns a tuple: (valid_schedules, missing_courses)
     """
+    LOGGER.info(f"Generating schedules for {len(courses)} courses. Term: {term}, Campus: {campus}")
     
     fixed_sections: List[ParsedSection] = []
     variable_courses: List[str] = []
@@ -178,24 +186,40 @@ async def generate_schedules(
         else:
             variable_courses.append(course.courseId)
 
+    LOGGER.info(f"Fixed sections: {len(fixed_sections)}, Variable courses: {variable_courses}")
+
+    missing_courses: List[str] = []
     # 2. Fetch sections for variable courses
     tasks = []
+    task_course_codes = []
     for code in variable_courses:
-        parts = code.split()
-        if len(parts) >= 2:
-            subject = parts[0]
-            number = parts[1]
+        # Try to parse subject and number using regex to handle "CSE2331" and "CSE 2331"
+        match = re.match(r"([A-Za-z]+)\s*(\d+)", code)
+        if match:
+            subject = match.group(1).upper()
+            number = match.group(2)
             tasks.append(fetch_osu_course_sections(subject, number, term=term, campus=campus))
+            task_course_codes.append(code)
+        else:
+            # Fallback to split if regex fails (though regex covers most cases)
+            parts = code.split()
+            if len(parts) >= 2:
+                subject = parts[0].upper()
+                number = parts[1]
+                tasks.append(fetch_osu_course_sections(subject, number, term=term, campus=campus))
+                task_course_codes.append(code)
+            else:
+                LOGGER.warning(f"Invalid course code format: {code}")
+                missing_courses.append(code)
     
     results = await asyncio.gather(*tasks, return_exceptions=True)
     
     course_sections_map: Dict[str, List[ParsedSection]] = {}
-    missing_courses: List[str] = []
     
     for i, res in enumerate(results):
-        code = variable_courses[i]
+        code = task_course_codes[i]
         if isinstance(res, Exception):
-            print(f"Error fetching {code}: {res}")
+            LOGGER.error(f"Error fetching {code}: {res}")
             missing_courses.append(code)
             continue
             
@@ -223,9 +247,10 @@ async def generate_schedules(
             ))
         
         if parsed_sections:
+            LOGGER.info(f"Found {len(parsed_sections)} sections for {code}")
             course_sections_map[code] = parsed_sections
         else:
-            print(f"No sections found for {code}")
+            LOGGER.warning(f"No sections found for {code}")
             missing_courses.append(code)
             
     # 3. Generate combinations (Backtracking)
@@ -299,4 +324,224 @@ async def generate_schedules(
     
     backtrack(0, [])
     
+    LOGGER.info(f"Generated {len(valid_schedules)} valid schedules. Missing courses: {missing_courses}")
     return valid_schedules, missing_courses
+
+async def generate_schedule_options(request: GenerateScheduleRequest) -> GenerateScheduleResponse:
+    try:
+        # 1. Convert events to TimeSlots for generator
+        generator_events = []
+        for event in request.events:
+            # Parse event times
+            # Helper to parse HH:mm
+            def parse_hm(t):
+                if not t: return 0
+                try:
+                    h, m = map(int, t.split(':'))
+                    return h * 60 + m
+                except:
+                    return 0
+                
+            start_min = parse_hm(event.startTime)
+            end_min = parse_hm(event.endTime)
+            
+            if event.repeatDays:
+                for day in event.repeatDays:
+                    # Ensure day is a string and valid
+                    if isinstance(day, str):
+                        generator_events.append(TimeSlot(
+                            day=day,
+                            start_minutes=start_min,
+                            end_minutes=end_min
+                        ))
+                    else:
+                        LOGGER.warning(f"Invalid day format in event: {day}")
+
+        # 2. Generate schedules
+        # We limit to 3 candidates for grading to save time/tokens
+        candidates, missing_courses = await generate_schedules(
+            request.courses,
+            request.term,
+            request.campus,
+            events=generator_events,
+            max_schedules=3
+        )
+        
+        if not candidates and missing_courses:
+            # If no valid schedules found but we have missing courses, 
+            # create a dummy empty schedule so we can return the missing ones.
+            candidates = [[]]
+        
+        if not candidates and not missing_courses:
+            # If no candidates and no missing courses (meaning conflict or empty request), return empty.
+            return GenerateScheduleResponse(schedules=[])
+
+        # 3. Convert candidates to Schedule objects (without grading)
+        schedules = []
+        
+        for index, candidate in enumerate(candidates):
+            courses_for_schema = []
+            
+            for section in candidate:
+                # Create Course schema object
+                # We need to map ParsedSection to Course
+                
+                # Find first slot to get start/end time (assuming consistent)
+                s_time = None
+                e_time = None
+                days = []
+                if section.time_slots and len(section.time_slots) > 0:
+                    # Format back to HH:mm
+                    def fmt_hm(m):
+                        h = m // 60
+                        mn = m % 60
+                        return f"{h:02d}:{mn:02d}"
+                    
+                    s_time = fmt_hm(section.time_slots[0].start_minutes)
+                    e_time = fmt_hm(section.time_slots[0].end_minutes)
+                    days = list(set(s.day for s in section.time_slots))
+                elif section.section_data.startTime and section.section_data.endTime:
+                    # Fallback to section data if time_slots is empty but data exists
+                    s_time = section.section_data.startTime
+                    e_time = section.section_data.endTime
+                    days = section.section_data.repeatDays or []
+                
+                # Determine mode
+                mode = section.section_data.mode
+                
+                # Determine type (Lecture/Lab/Recitation)
+                course_type = section.section_data.type
+
+                course_obj = Course(
+                    courseId=f"{section.course_subject} {section.course_number}",
+                    title=section.section_data.title,
+                    instructor=section.section_data.instructor,
+                    startTime=s_time,
+                    endTime=e_time,
+                    repeatDays=days,
+                    campus=request.campus,
+                    semester=request.term,
+                    session=section.section_data.session,
+                    mode=mode,
+                    type=course_type,
+                    status=section.section_data.status
+                )
+                courses_for_schema.append(course_obj)
+                
+            # Add missing courses to the schedule with empty details
+            for m_course in missing_courses:
+                courses_for_schema.append(Course(
+                    courseId=m_course,
+                    campus=request.campus,
+                    semester=request.term,
+                    # Other fields will be None/null, indicating missing info
+                ))
+            
+            # Create Schedule schema object with default scores
+            sched = Schedule(
+                id=index, # Temporary ID
+                name=f"Option {index + 1}",
+                favorite=False,
+                campus=request.campus,
+                semester=request.term,
+                courses=courses_for_schema,
+                events=request.events,
+                difficultyScore=0,
+                weeklyHours=0,
+                creditHours=0,
+            )
+            schedules.append(sched)
+
+        return GenerateScheduleResponse(schedules=schedules)
+    except Exception as e:
+        LOGGER.error(f"Error generating schedule: {e}")
+        import traceback
+        traceback.print_exc()
+        raise e
+
+
+async def analyze_generated_schedules(request: AnalyzeSchedulesRequest) -> List[Schedule]:
+    """
+    Analyze a list of schedules using the AI agent to calculate difficulty, time load, etc.
+    """
+    async def analyze_one(schedule: Schedule):
+        # Convert Schedule to ClassTeacherTuple for agent
+        schedule_tuples = []
+        for course in schedule.courses:
+            # We assume courseId is like "CSE 2231"
+            schedule_tuples.append(ClassTeacherTuple(
+                class_id=course.courseId,
+                teacher=course.instructor
+            ))
+            
+        # Run agent
+        initial_state = {
+            "schedule": schedule_tuples,
+            "schedule_score": None,
+            "messages": "",
+            "constraints": str(request.preferences) if request.preferences else None,
+            "session": None 
+        }
+        
+        try:
+            LOGGER.info(f"Starting analysis for schedule {schedule.id} with {len(schedule_tuples)} courses")
+            result = await schedule_grading_graph.ainvoke(initial_state)
+            score: ScheduleScore = result.get("schedule_score")
+            
+            if score:
+                LOGGER.info(f"Analysis complete for schedule {schedule.id}. Score: {score.adjusted_difficulty}")
+                
+                # Populate grading details dictionary
+                schedule.gradingDetails = {
+                    "summary": score.summary,
+                    "adjusted_difficulty": score.adjusted_difficulty,
+                    "adjusted_assessment_intensity": score.adjusted_assessment_intensity,
+                    "adjusted_project_intensity": score.adjusted_project_intensity,
+                    "time_load": score.time_load,
+                    "adjusted_rigor": score.adjusted_rigor,
+                    "constraints": score.constraints,
+                    "confidence": score.confidence
+                }
+                
+                # Populate top-level convenience fields
+                schedule.difficultyScore = score.adjusted_difficulty
+                schedule.weeklyHours = score.time_load
+                schedule.creditHours = score.total_credit_hours
+                
+                # Update individual course scores
+                if score.class_scores:
+                    LOGGER.info(f"Updating {len(score.class_scores)} course scores for schedule {schedule.id}")
+                    for course in schedule.courses:
+                        # Normalize course info to match agent's keys
+                        c_id = course.courseId.replace(" ", "").lower() if course.courseId else ""
+                        t_name = course.instructor.replace(" ", "").lower() if course.instructor else "unknown"
+                        
+                        # Find matching score
+                        found = False
+                        for key, class_score in score.class_scores.items():
+                            # print(f"Comparing {c_id}|{t_name} with {key.class_id}|{key.teacher}")
+                            if key.class_id == c_id and key.teacher == t_name:
+                                course.difficultyRating = class_score.score
+                                course.ratingDetails = class_score.model_dump()
+                                found = True
+                                break
+                        if not found:
+                            LOGGER.warning(f"No score found for {c_id} {t_name}")
+                else:
+                    LOGGER.warning(f"No class scores returned for schedule {schedule.id}")
+            else:
+                LOGGER.warning(f"No score object returned for schedule {schedule.id}")
+        except Exception as e:
+            LOGGER.error(f"Error analyzing schedule {schedule.id}: {e}")
+            import traceback
+            traceback.print_exc()
+            
+        return schedule
+
+    # Run analyses sequentially to avoid rate limits and timeouts
+    analyzed_schedules = []
+    for s in request.schedules:
+        analyzed = await analyze_one(s)
+        analyzed_schedules.append(analyzed)
+    
+    return analyzed_schedules

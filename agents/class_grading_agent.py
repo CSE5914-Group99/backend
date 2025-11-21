@@ -167,24 +167,25 @@ agent = create_react_agent(
     response_format=ClassScore
 )
 
-from sqlalchemy import select
+from sqlalchemy import select, func
 from db.models import Course
 
 # Node 1: Check cache for class info
 async def check_cache(state: ClassGradingState) -> ClassGradingState:
     """Check if class information is already cached in the database (Course table)"""
     session = state.get("session")
-    class_name = state.get("class_name")
-    teacher_name = state.get("teacher_name")
+    class_name = state.get("class_name") # Normalized: cse2331
+    teacher_name = state.get("teacher_name") # Normalized: johndoe
 
     if not session:
         return {"cached": False, "class_score": None}
 
     try:
         # Query Course for any entry with matching course_id and teacher_name that has rating_details
+        # We need to normalize the DB values to match the input state
         stmt = select(Course.rating_details).where(
-            Course.course_id == class_name,
-            Course.teacher_name == teacher_name,
+            func.replace(func.lower(Course.course_id), ' ', '') == class_name,
+            func.replace(func.lower(Course.teacher_name), ' ', '') == teacher_name,
             Course.rating_details.is_not(None)
         ).limit(1)
         
@@ -192,12 +193,15 @@ async def check_cache(state: ClassGradingState) -> ClassGradingState:
         rating_details = result.scalar_one_or_none()
 
         if rating_details:
+            print(f"Cache HIT for {class_name} / {teacher_name}")
             # Found cached data - convert JSON to ClassScore
             class_score = ClassScore(**rating_details)
             return {
                 "cached": True,
                 "class_score": class_score
             }
+        else:
+            print(f"Cache MISS for {class_name} / {teacher_name}")
     except Exception as e:
         # If cache lookup fails, continue to agent
         print(f"Cache lookup error: {e}")

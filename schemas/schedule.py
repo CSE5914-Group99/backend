@@ -10,7 +10,7 @@ DayOfWeek = Literal['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Sat
 
 
 class Course(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
     courseId: str
     id: Optional[str | int] = None  # Changed to allow string IDs (e.g. "CSE 2221")
@@ -28,13 +28,13 @@ class Course(BaseModel):
     status: Optional[str] = None
     
     # Full grading details from the agent
-    ratingDetails: Optional[Dict[str, Any]] = None
+    ratingDetails: Optional[Dict[str, Any]] = Field(default=None, alias="rating_details")
 
 
 class Event(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    id: Optional[int] = None
+    id: Optional[str | int] = None
     title: str
     description: Optional[str] = None
     startTime: Optional[str] = None
@@ -47,16 +47,22 @@ class Event(BaseModel):
 class Schedule(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    id: Optional[int] = None
+    id: Optional[str | int] = None
     name: str
     favorite: bool
     campus: Optional[str] = None
     semester: Optional[str] = None
     courses: List[Course] = Field(default_factory=list)
     events: List[Event] = Field(default_factory=list)
+    
+    # Top-level convenience fields (mapped from gradingDetails in ORM properties)
     difficultyScore: Optional[float] = None
     weeklyHours: Optional[float] = None
     creditHours: Optional[float] = None
+    
+    # Full grading details
+    gradingDetails: Optional[Dict[str, Any]] = Field(default=None, alias="grading_details")
+    
     createdAt: Optional[datetime] = None
     updatedAt: Optional[datetime] = None
 
@@ -75,14 +81,26 @@ class Schedule(BaseModel):
 # I will assume the frontend uses `Schedule` for everything now.
 
 class SchedulePayload(BaseModel):
-    scheduleId: Optional[int] = None
-    id: Optional[int] = None  # Alias for scheduleId to support frontend sending 'id'
+    model_config = ConfigDict(populate_by_name=True)
+
+    scheduleId: Optional[str | int] = None
+    id: Optional[str | int] = None  # Alias for scheduleId to support frontend sending 'id'
     name: str
     favorite: bool
     campus: Optional[str] = None
-    semester: Optional[str] = None
+    semester: Optional[str] = Field(None, alias="term") # Allow "term" from frontend to map to "semester"
     courses: List[Course] = Field(default_factory=list)
     events: List[Event] = Field(default_factory=list)
+    
+    # Grading details passed back from frontend (if available)
+    # Allow both gradingDetails (frontend) and grading_details (backend/ORM)
+    gradingDetails: Optional[Dict[str, Any]] = Field(default=None, alias="grading_details")
+    
+    # Top-level metrics
+    difficultyScore: Optional[float] = None
+    weeklyHours: Optional[float] = None
+    creditHours: Optional[float] = None
+    
     # Support legacy fields if frontend still sends them
     items: Optional[List[Any]] = None 
     activities: Optional[List[Any]] = None
@@ -98,3 +116,20 @@ class ScheduleLoadRequest(BaseModel):
 class ScheduleLoadResult(BaseModel):
     weeklyHours: float
     byCourse: Dict[str, float]
+
+
+class GenerateScheduleRequest(BaseModel):
+    courses: List[Course]
+    term: str = "Autumn 2024"
+    campus: str = "Columbus"
+    events: List[Event] = []
+    preferences: Optional[dict] = None
+
+
+class GenerateScheduleResponse(BaseModel):
+    schedules: List[Schedule]
+
+
+class AnalyzeSchedulesRequest(BaseModel):
+    schedules: List[Schedule]
+    preferences: Optional[dict] = None
