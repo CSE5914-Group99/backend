@@ -28,13 +28,10 @@ class User(Base):
     __tablename__ = "users"
     __table_args__ = (
         UniqueConstraint("email", name="uq_users_email"),
-        UniqueConstraint("google_uid", name="uq_users_google_uid"),
     )
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    google_uid: Mapped[str] = mapped_column(String(255), primary_key=True)
     email: Mapped[str] = mapped_column(String(255), nullable=False)
-
-    google_uid: Mapped[str | None] = mapped_column(String(255), nullable=True)
     preferences: Mapped[str] = mapped_column(Text, nullable=False, default="")
     
     first_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
@@ -51,7 +48,7 @@ class Schedule(Base):
     __tablename__ = "schedules"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.google_uid", ondelete="CASCADE"), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False, default="Untitled")
     is_starred: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     campus: Mapped[str | None] = mapped_column(String(100), nullable=True)

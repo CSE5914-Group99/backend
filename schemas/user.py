@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field
 class User(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    google_uid: Optional[str] = None
+    google_uid: str
     email: Optional[EmailStr] = None
     first_name: Optional[str] = None
     last_name: Optional[str] = None
@@ -19,7 +19,7 @@ class User(BaseModel):
 
 class UserCreate(BaseModel):
     email: EmailStr
-    google_uid: Optional[str] = None
+    google_uid: str
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     date_of_birth: Optional[date] = None
