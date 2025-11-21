@@ -6,7 +6,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from db import (
-    Course as CourseORM,
     Schedule as ScheduleORM,
     ScheduleActivity as ScheduleActivityORM,
     ScheduleCourse as ScheduleCourseORM,
@@ -43,24 +42,6 @@ async def _ensure_user_exists(google_uid: str, session: AsyncSession) -> str:
     if not user_uid:
         raise HTTPException(status_code=404, detail="User not found")
     return user_uid
-
-
-async def _get_or_create_course(course_id: str, session: AsyncSession, teacher_name: str | None = None) -> CourseORM:
-    """Fetch a Course by (course_id, teacher_name) unique pair or create if missing.
-
-    teacher_name defaults to 'unknown' when not provided.
-    """
-    tn = teacher_name or "unknown"
-    result = await session.execute(
-        select(CourseORM).where(CourseORM.course_id == course_id, CourseORM.teacher_name == tn)
-    )
-    course = result.scalars().first()
-    if course is None:
-        # Provide a minimal default for required JSON field
-        course = CourseORM(course_id=course_id, teacher_name=tn, course_rating={})
-        session.add(course)
-        await session.flush()
-    return course
 
 
 @schedule_router.get(
@@ -119,26 +100,23 @@ async def add_schedule(
     user_id = await _ensure_user_exists(google_uid, session)
     favorite_flag = body.favorite if body.favorite is not None else False
     
-    # Use courses from payload
+    # Build child objects fully in-memory
     courses_payload = body.courses or []
-    
-    pre_resolved: list[tuple[str, str]] = []  # (course_id, teacher_name)
-    for item in courses_payload:
-        teacher_name = item.instructor or "unknown"
-        await _get_or_create_course(item.courseId, session, teacher_name)
-        pre_resolved.append((item.courseId, teacher_name))
-
-    # Build child objects fully in-memory with no awaits
     detailed_courses: list[ScheduleCourseORM] = [
         ScheduleCourseORM(
-            course_id=cid,
-            teacher_name=tname,
+            course_id=item.courseId,
+            teacher_name=item.instructor or "unknown",
+            title=item.title or "Untitled Course",
             section_id=str(item.session) if item.session else None,
             times_days=_format_times_days(item.repeatDays, item.startTime, item.endTime),
             campus=item.campus,
             semester=item.semester,
+            type=item.type,
+            difficulty_rating=item.difficultyRating,
+            mode=item.mode,
+            status=item.status,
         )
-        for (cid, tname), item in zip(pre_resolved, courses_payload)
+        for item in courses_payload
     ]
 
     events_payload = body.events or []
@@ -223,47 +201,48 @@ async def save_schedule(
         schedule.semester = body.semester
 
     if body.courses is not None:
-        # Resolve courses first
-        resolved_items: list[ScheduleCourseORM] = []
-        for item in body.courses:
-            teacher_name = item.instructor or "unknown"
-            await _get_or_create_course(item.courseId, session, teacher_name)
-            resolved_items.append(
-                ScheduleCourseORM(
-                    schedule_id=schedule.id,
-                    course_id=item.courseId,
-                    teacher_name=teacher_name,
-                    section_id=str(item.session) if item.session else None,
-                    times_days=_format_times_days(item.repeatDays, item.startTime, item.endTime),
-                    campus=item.campus,
-                    semester=item.semester,
-                )
-            )
-
         # Replace children via direct table ops to avoid lazy-loading collections
         await session.execute(
             delete(ScheduleCourseORM).where(ScheduleCourseORM.schedule_id == schedule.id)
         )
-        session.add_all(resolved_items)
+        
+        new_courses = [
+            ScheduleCourseORM(
+                schedule_id=schedule.id,
+                course_id=item.courseId,
+                teacher_name=item.instructor or "unknown",
+                title=item.title or "Untitled Course",
+                section_id=str(item.session) if item.session else None,
+                times_days=_format_times_days(item.repeatDays, item.startTime, item.endTime),
+                campus=item.campus,
+                semester=item.semester,
+                type=item.type,
+                difficulty_rating=item.difficultyRating,
+                mode=item.mode,
+                status=item.status,
+            )
+            for item in body.courses
+        ]
+        session.add_all(new_courses)
 
     if body.events is not None:
         # Replace activities via direct table ops
         await session.execute(
             delete(ScheduleActivityORM).where(ScheduleActivityORM.schedule_id == schedule.id)
         )
-        session.add_all(
-            [
-                ScheduleActivityORM(
-                    schedule_id=schedule.id,
-                    title=event.title,
-                    description=event.description,
-                    times_days=_format_times_days(event.repeatDays, event.startTime, event.endTime),
-                    campus=event.campus,
-                    semester=event.semester,
-                )
-                for event in body.events
-            ]
-        )
+        
+        new_activities = [
+            ScheduleActivityORM(
+                schedule_id=schedule.id,
+                title=event.title,
+                description=event.description,
+                times_days=_format_times_days(event.repeatDays, event.startTime, event.endTime),
+                campus=event.campus,
+                semester=event.semester,
+            )
+            for event in body.events
+        ]
+        session.add_all(new_activities)
 
     if body.favorite is not None:
         schedule.is_starred = body.favorite
@@ -299,3 +278,26 @@ async def delete_schedule(
 
     await session.delete(schedule)
     await session.commit()
+
+
+@schedule_router.get(
+    "/{google_uid}/{scheduleId}",
+    response_model=Schedule,
+    summary="Get a specific schedule",
+)
+async def get_schedule(
+    google_uid: str, scheduleId: int, session: AsyncSession = Depends(get_session)
+):
+    user_id = await _ensure_user_exists(google_uid, session)
+    result = await session.execute(
+        select(ScheduleORM)
+        .options(
+            selectinload(ScheduleORM.detailed_courses),
+            selectinload(ScheduleORM.activities),
+        )
+        .where(ScheduleORM.id == scheduleId, ScheduleORM.user_id == user_id)
+    )
+    schedule = result.scalars().first()
+    if not schedule:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+    return schedule

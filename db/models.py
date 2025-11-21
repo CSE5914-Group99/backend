@@ -112,18 +112,6 @@ class Schedule(Base):
 
 
 
-class Course(Base):
-    __tablename__ = "courses"
-    __table_args__ = (
-        UniqueConstraint("course_id", "teacher_name", name="uq_course_teacher"),
-    )
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    course_id: Mapped[str] = mapped_column(String(50), nullable=False)
-    teacher_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    course_rating: Mapped[dict] = mapped_column(JSON, nullable=False)
-
-
 class ScheduleActivity(Base):
     __tablename__ = "schedule_activities"
 
@@ -164,23 +152,6 @@ class ScheduleActivity(Base):
         return days
 
 
-
-class ScheduleCourseLink(Base):
-    """Pure junction table linking schedules to courses (composite primary key)"""
-    __tablename__ = "schedule_course_links"
-    __table_args__ = (
-        ForeignKeyConstraint(
-            ["course_id", "teacher_name"],
-            ["courses.course_id", "courses.teacher_name"],
-            ondelete="CASCADE"
-        ),
-    )
-
-    schedule_id: Mapped[int] = mapped_column(ForeignKey("schedules.id", ondelete="CASCADE"), primary_key=True)
-    course_id: Mapped[str] = mapped_column(String(50), primary_key=True)
-    teacher_name: Mapped[str] = mapped_column(String(255), primary_key=True, default="unknown")
-
-
 class ScheduleCourse(Base):
     """Stores section/timing information for courses in a schedule"""
     __tablename__ = "schedule_courses"
@@ -188,21 +159,22 @@ class ScheduleCourse(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     schedule_id: Mapped[int] = mapped_column(ForeignKey("schedules.id", ondelete="CASCADE"), nullable=False)
     course_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    title: Mapped[str | None] = mapped_column(String(255), nullable=True)
     teacher_name: Mapped[str] = mapped_column(String(255), nullable=False, default="unknown")
     section_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
     times_days: Mapped[str | None] = mapped_column(String(255), nullable=True)
     campus: Mapped[str | None] = mapped_column(String(100), nullable=True)
     semester: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    difficulty_rating: Mapped[float | None] = mapped_column(Float, nullable=True)
+    mode: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    status: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
     # Relationship back to parent schedule for automatic schedule_id assignment
     schedule: Mapped[Schedule] = relationship(back_populates="detailed_courses")
 
     @property
     def courseId(self) -> str:
-        return self.course_id
-
-    @property
-    def title(self) -> str:
-        # For now, use course_id as title if we don't have a separate title field
         return self.course_id
 
     @property
@@ -235,4 +207,12 @@ class ScheduleCourse(Base):
             if day in self.times_days:
                 days.append(day)
         return days
+
+    @property
+    def difficultyRating(self) -> float | None:
+        return self.difficulty_rating
+
+    @property
+    def session(self) -> int | None:
+        return int(self.section_id) if self.section_id and self.section_id.isdigit() else None
 

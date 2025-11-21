@@ -19,11 +19,11 @@ from .tools.reddit_search import reddit_search_tool
 #from .tools.osu_search import osu_search
 #from .tools.coursicle_search import coursicle_search
 
-# Import CRUD functions for caching
-import sys
-from pathlib import Path
-sys.path.append(str(Path(__file__).parent.parent))
-from db.functions.courses import get_course, upsert_course
+# Import CRUD functions for caching - DISABLED
+# import sys
+# from pathlib import Path
+# sys.path.append(str(Path(__file__).parent.parent))
+# from db.functions.courses import get_course, upsert_course
 
 prompt = '''
 You are an expert Ohio State University class difficulty analyzer. Your job is to research and evaluate the difficulty of OSU classes to help students make informed course selection decisions.
@@ -167,34 +167,6 @@ agent = create_react_agent(
     response_format=ClassScore
 )
 
-# Node 1: Check cache for class info
-async def check_cache(state: ClassGradingState) -> ClassGradingState:
-    """Check if class information is already cached in the database"""
-    session = state.get("session")
-    class_name = state.get("class_name")
-    teacher_name = state.get("teacher_name")
-
-    try:
-        # Query database for cached rating
-        cached_course = await get_course(session, class_name, teacher_name)
-
-        if cached_course:
-            # Found cached data - convert JSON to ClassScore
-            class_score = ClassScore(**cached_course.course_rating)
-            return {
-                "cached": True,
-                "class_score": class_score
-            }
-    except Exception as e:
-        # If cache lookup fails, continue to agent
-        print(f"Cache lookup error: {e}")
-
-    # No cache found or error occurred
-    return {
-        "cached": False,
-        "class_score": None
-    }
-
 # Node 2: Score class agent (calls tools)
 async def score_class_agent(state: ClassGradingState) -> ClassGradingState:
     """Agent that calls various tools to score the class"""
@@ -205,55 +177,17 @@ async def score_class_agent(state: ClassGradingState) -> ClassGradingState:
         "class_score": response['structured_response']
     }
 
-# Node 3: Cache class score and relevant course info
-async def cache_class_score(state: ClassGradingState) -> ClassGradingState:
-    """Cache the class scoring information in the database"""
-    session = state.get("session")
-    class_name = state.get("class_name")
-    teacher_name = state.get("teacher_name")
-    class_score = state.get("class_score")
-
-    try:
-        # Convert ClassScore to dict for JSON storage
-        course_rating = class_score.model_dump()
-
-        # Upsert to database (create or update)
-        await upsert_course(session, class_name, teacher_name, course_rating)
-
-        return {"cached": True}
-    except Exception as e:
-        print(f"Error caching course rating: {e}")
-        return {"cached": False}
-
-# Conditional edge, Route based on cache hit/miss
-def route_after_cache_check(state: ClassGradingState) -> Literal["score_class_agent", "end"]:
-    """Route to agent if no cache, otherwise end"""
-    if state.get("cached") and state.get("class_score"):
-        return "end"
-    return "score_class_agent"
-
 # Build the graph
 def create_class_grading_graph():
     """Create and return the compiled class grading graph"""
     graph = StateGraph(ClassGradingState)
 
     # Add nodes
-    graph.add_node("check_cache", check_cache)
     graph.add_node("score_class_agent", score_class_agent)
-    graph.add_node("cache_class_score", cache_class_score)
 
     # Add edges
-    graph.add_edge(START, "check_cache")
-    graph.add_conditional_edges(
-        "check_cache",
-        route_after_cache_check,
-        {
-            "score_class_agent": "score_class_agent",
-            "end": END
-        }
-    )
-    graph.add_edge("score_class_agent", "cache_class_score")
-    graph.add_edge("cache_class_score", END)
+    graph.add_edge(START, "score_class_agent")
+    graph.add_edge("score_class_agent", END)
 
     return graph.compile()
 

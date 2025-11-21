@@ -34,9 +34,9 @@ class Event(BaseModel):
     id: Optional[str] = None
     title: str
     description: Optional[str] = None
-    startTime: str
-    endTime: str
-    repeatDays: List[DayOfWeek]
+    startTime: Optional[str] = None
+    endTime: Optional[str] = None
+    repeatDays: Optional[List[DayOfWeek]] = None
     campus: Optional[str] = None
     semester: Optional[str] = None
 
