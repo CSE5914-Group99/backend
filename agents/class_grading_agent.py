@@ -167,6 +167,47 @@ agent = create_react_agent(
     response_format=ClassScore
 )
 
+from sqlalchemy import select
+from db.models import ScheduleCourse
+
+# Node 1: Check cache for class info
+async def check_cache(state: ClassGradingState) -> ClassGradingState:
+    """Check if class information is already cached in the database (ScheduleCourse table)"""
+    session = state.get("session")
+    class_name = state.get("class_name")
+    teacher_name = state.get("teacher_name")
+
+    if not session:
+        return {"cached": False, "class_score": None}
+
+    try:
+        # Query ScheduleCourse for any entry with matching course_id and teacher_name that has rating_details
+        stmt = select(ScheduleCourse.rating_details).where(
+            ScheduleCourse.course_id == class_name,
+            ScheduleCourse.teacher_name == teacher_name,
+            ScheduleCourse.rating_details.is_not(None)
+        ).limit(1)
+        
+        result = await session.execute(stmt)
+        rating_details = result.scalar_one_or_none()
+
+        if rating_details:
+            # Found cached data - convert JSON to ClassScore
+            class_score = ClassScore(**rating_details)
+            return {
+                "cached": True,
+                "class_score": class_score
+            }
+    except Exception as e:
+        # If cache lookup fails, continue to agent
+        print(f"Cache lookup error: {e}")
+
+    # No cache found or error occurred
+    return {
+        "cached": False,
+        "class_score": None
+    }
+
 # Node 2: Score class agent (calls tools)
 async def score_class_agent(state: ClassGradingState) -> ClassGradingState:
     """Agent that calls various tools to score the class"""
@@ -177,16 +218,32 @@ async def score_class_agent(state: ClassGradingState) -> ClassGradingState:
         "class_score": response['structured_response']
     }
 
+# Conditional edge, Route based on cache hit/miss
+def route_after_cache_check(state: ClassGradingState) -> Literal["score_class_agent", "end"]:
+    """Route to agent if no cache, otherwise end"""
+    if state.get("cached") and state.get("class_score"):
+        return "end"
+    return "score_class_agent"
+
 # Build the graph
 def create_class_grading_graph():
     """Create and return the compiled class grading graph"""
     graph = StateGraph(ClassGradingState)
 
     # Add nodes
+    graph.add_node("check_cache", check_cache)
     graph.add_node("score_class_agent", score_class_agent)
 
     # Add edges
-    graph.add_edge(START, "score_class_agent")
+    graph.add_edge(START, "check_cache")
+    graph.add_conditional_edges(
+        "check_cache",
+        route_after_cache_check,
+        {
+            "score_class_agent": "score_class_agent",
+            "end": END
+        }
+    )
     graph.add_edge("score_class_agent", END)
 
     return graph.compile()

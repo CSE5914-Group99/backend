@@ -115,6 +115,7 @@ async def add_schedule(
             difficulty_rating=item.difficultyRating,
             mode=item.mode,
             status=item.status,
+            rating_details=item.ratingDetails,
         )
         for item in courses_payload
     ]
@@ -220,6 +221,7 @@ async def save_schedule(
                 difficulty_rating=item.difficultyRating,
                 mode=item.mode,
                 status=item.status,
+                rating_details=item.ratingDetails,
             )
             for item in body.courses
         ]

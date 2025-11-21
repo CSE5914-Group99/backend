@@ -13,7 +13,7 @@ class Course(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     courseId: str
-    id: Optional[str] = None
+    id: Optional[int] = None
     title: Optional[str] = None
     instructor: Optional[str] = None
     startTime: Optional[str] = None  # HH:mm format
@@ -26,12 +26,15 @@ class Course(BaseModel):
     campus: Optional[str] = None
     semester: Optional[str] = None
     status: Optional[str] = None
+    
+    # Full grading details from the agent
+    ratingDetails: Optional[Dict[str, Any]] = None
 
 
 class Event(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    id: Optional[str] = None
+    id: Optional[int] = None
     title: str
     description: Optional[str] = None
     startTime: Optional[str] = None
@@ -54,8 +57,8 @@ class Schedule(BaseModel):
     difficultyScore: Optional[float] = None
     weeklyHours: Optional[float] = None
     creditHours: Optional[float] = None
-    createdAt: Optional[str] = None
-    updatedAt: Optional[str] = None
+    createdAt: Optional[datetime] = None
+    updatedAt: Optional[datetime] = None
 
 
 # Legacy/Payload models to support creation if needed, or we can use Schedule

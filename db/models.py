@@ -169,6 +169,8 @@ class ScheduleCourse(Base):
     difficulty_rating: Mapped[float | None] = mapped_column(Float, nullable=True)
     mode: Mapped[str | None] = mapped_column(String(50), nullable=True)
     status: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # Store full agent grading details (JSON) to act as a cache
+    rating_details: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     # Relationship back to parent schedule for automatic schedule_id assignment
     schedule: Mapped[Schedule] = relationship(back_populates="detailed_courses")
