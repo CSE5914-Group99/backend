@@ -62,6 +62,16 @@ async def get_user(google_uid: str, session: AsyncSession = Depends(get_session)
 
 
 @users_router.get(
+    "/google/{google_uid}",
+    response_model=User,
+    summary="Get a user by Google UID (Legacy)",
+)
+async def get_user_by_google(google_uid: str, session: AsyncSession = Depends(get_session)):
+    """Fetch a user by their Google UID. Returns 200 with user or 404 if not found."""
+    return await get_user(google_uid, session)
+
+
+@users_router.get(
     "/google/{google_uid}/exists",
     response_model=UserExists,
     summary="Check if a user exists by Google UID",

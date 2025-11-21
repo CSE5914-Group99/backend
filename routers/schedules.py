@@ -38,11 +38,11 @@ def _format_times_days(repeat_days: list[str] | None, start_time: str | None, en
     return f"{days_str} {start_time}-{end_time}".strip()
 
 
-async def _ensure_user_exists(google_uid: str, session: AsyncSession) -> int:
-    user_id = await session.scalar(select(UserORM.id).where(UserORM.google_uid == google_uid))
-    if not user_id:
+async def _ensure_user_exists(google_uid: str, session: AsyncSession) -> str:
+    user_uid = await session.scalar(select(UserORM.google_uid).where(UserORM.google_uid == google_uid))
+    if not user_uid:
         raise HTTPException(status_code=404, detail="User not found")
-    return user_id
+    return user_uid
 
 
 async def _get_or_create_course(course_id: str, session: AsyncSession, teacher_name: str | None = None) -> CourseORM:
