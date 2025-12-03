@@ -138,8 +138,18 @@ class ScheduleGradingState(TypedDict):
     constraints: str | None # User constraints for scoring
     session: AsyncSession | None  # Database session
 
+# Define input state for the score_class_agent_graph node
+class ScoreClassInputState(TypedDict):
+    messages: Annotated[list, add_messages]
+    class_name: str
+    teacher_name: str | None
+    class_score: ClassScore | None
+    cached: bool
+    session: AsyncSession | None
+    class_teacher_tuple: ClassTeacherTuple
+
 # Node 3: Score individual class using the class grading graph
-async def score_class_agent_graph(state: ClassGradingState) -> dict:
+async def score_class_agent_graph(state: ScoreClassInputState) -> dict:
     """
     Execute the class grading graph for a single class.
     This node will be called in parallel for each class in the schedule.
@@ -147,9 +157,18 @@ async def score_class_agent_graph(state: ClassGradingState) -> dict:
     # Create a new session for this parallel operation to avoid concurrent session errors
     session_factory = get_session_factory()
     async with session_factory() as session:
-        # Update state with new session
-        state_with_session = {**state, "session": session}
-        result = await class_grading_graph.ainvoke(state_with_session)
+        # Create a clean input for the subgraph (ClassGradingState)
+        # We must NOT pass class_teacher_tuple to the subgraph as it doesn't expect it
+        subgraph_input = {
+            "messages": state["messages"],
+            "class_name": state["class_name"],
+            "teacher_name": state["teacher_name"],
+            "class_score": state["class_score"],
+            "cached": state["cached"],
+            "session": session
+        }
+        
+        result = await class_grading_graph.ainvoke(subgraph_input)
 
     class_teacher_tuple = state["class_teacher_tuple"]
     class_score = result["class_score"]

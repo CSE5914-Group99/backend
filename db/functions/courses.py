@@ -14,23 +14,34 @@ async def create_course(
 ) -> Course:
     """
     Create a new course rating.
-
-    Args:
-        session: Database session
-        course_id: Course identifier (e.g., "CSE2331")
-        teacher_name: Teacher's name
-        course_rating: JSON object containing ClassScore data
-
-    Returns:
-        Created Course object
-
-    Raises:
-        IntegrityError: If course with this course_id + teacher_name already exists
     """
+    # Generate a deterministic ID for the cache entry
+    # We use a prefix to distinguish from section IDs (numbers) and generic IDs (course codes)
+    # But to be safe and simple, let's just use "COURSE_TEACHER" format
+    # We normalize to ensure consistency
+    c_norm = course_id.replace(" ", "").upper()
+    t_norm = teacher_name.replace(" ", "").upper()
+    generated_id = f"{c_norm}_{t_norm}"
+    
+    # Check if this ID already exists to avoid PK violation
+    # (Though upsert_course checks existence by fields, not ID, so this is a safety net)
+    existing = await session.get(Course, generated_id)
+    if existing:
+        # If it exists by ID but wasn't found by get_course (which uses fields),
+        # it means the fields might be slightly different or we have a collision.
+        # We'll just update the existing one.
+        existing.rating_details = course_rating
+        existing.course_id = course_id
+        existing.teacher_name = teacher_name
+        await session.commit()
+        await session.refresh(existing)
+        return existing
+
     course = Course(
+        id=generated_id,
         course_id=course_id,
         teacher_name=teacher_name,
-        course_rating=course_rating
+        rating_details=course_rating
     )
     session.add(course)
     await session.commit()
@@ -135,7 +146,7 @@ async def update_course(
     """
     course = await get_course(session, course_id, teacher_name)
     if course:
-        course.course_rating = course_rating
+        course.rating_details = course_rating
         await session.commit()
         await session.refresh(course)
     return course
@@ -161,7 +172,7 @@ async def upsert_course(
     """
     course = await get_course(session, course_id, teacher_name)
     if course:
-        course.course_rating = course_rating
+        course.rating_details = course_rating
         await session.commit()
         await session.refresh(course)
     else:

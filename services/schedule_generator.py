@@ -7,6 +7,10 @@ from pydantic import BaseModel
 
 from services.osu_course_search import fetch_osu_course_sections, CourseSection
 
+from agents.class_grading_agent import class_grading_graph
+from langchain_core.messages import HumanMessage
+from db.session import get_session_factory
+
 LOGGER = logging.getLogger(__name__)
 
 class TimeSlot(BaseModel):
@@ -464,97 +468,100 @@ async def analyze_generated_schedules(request: AnalyzeSchedulesRequest) -> List[
     """
     Analyze a list of schedules using the AI agent to calculate difficulty, time load, etc.
     """
+    # Limit concurrency to avoid hitting OpenAI Rate Limits (TPM)
+    # 3 concurrent tasks is a safe balance for Tier 1 accounts (30k TPM)
+    concurrency_limit = asyncio.Semaphore(3)
+
     async def analyze_one(schedule: Schedule):
-        if not schedule.courses:
-            LOGGER.info(f"Skipping analysis for empty schedule {schedule.id}")
+        async with concurrency_limit:
+            if not schedule.courses:
+                LOGGER.info(f"Skipping analysis for empty schedule {schedule.id}")
+                return schedule
+
+            # Convert Schedule to ClassTeacherTuple for agent
+            schedule_tuples = []
+            for course in schedule.courses:
+                # We assume courseId is like "CSE 2231"
+                schedule_tuples.append(ClassTeacherTuple(
+                    class_id=course.courseId,
+                    teacher=course.instructor
+                ))
+                
+            # Run agent
+            initial_state = {
+                "schedule": schedule_tuples,
+                "schedule_score": None,
+                "messages": [],
+                "constraints": str(request.preferences) if request.preferences else None,
+                "session": None 
+            }
+            
+            for attempt in range(3):
+                try:
+                    LOGGER.info(f"Starting analysis for schedule {schedule.id} with {len(schedule_tuples)} courses (Attempt {attempt+1})")
+                    result = await schedule_grading_graph.ainvoke(initial_state)
+                    score: ScheduleScore = result.get("schedule_score")
+                    
+                    if score:
+                        LOGGER.info(f"Analysis complete for schedule {schedule.id}. Score: {score.adjusted_difficulty}")
+                        
+                        # Populate grading details dictionary
+                        schedule.gradingDetails = {
+                            "summary": score.summary,
+                            "adjusted_difficulty": score.adjusted_difficulty,
+                            "adjusted_assessment_intensity": score.adjusted_assessment_intensity,
+                            "adjusted_project_intensity": score.adjusted_project_intensity,
+                            "time_load": score.time_load,
+                            "adjusted_rigor": score.adjusted_rigor,
+                            "constraints": score.constraints,
+                            "confidence": score.confidence
+                        }
+                        
+                        # Populate top-level convenience fields
+                        schedule.difficultyScore = score.adjusted_difficulty
+                        schedule.weeklyHours = score.time_load
+                        schedule.creditHours = score.total_credit_hours
+                        
+                        # Update individual course scores
+                        if score.class_scores:
+                            LOGGER.info(f"Updating {len(score.class_scores)} course scores for schedule {schedule.id}")
+                            for course in schedule.courses:
+                                # Normalize course info to match agent's keys
+                                c_id = course.courseId.replace(" ", "").lower() if course.courseId else ""
+                                t_name = course.instructor.replace(" ", "").lower() if course.instructor else "unknown"
+                                
+                                # Find matching score
+                                found = False
+                                for key, class_score in score.class_scores.items():
+                                    # print(f"Comparing {c_id}|{t_name} with {key.class_id}|{key.teacher}")
+                                    if key.class_id == c_id and key.teacher == t_name:
+                                        course.difficultyRating = class_score.score
+                                        course.ratingDetails = class_score.model_dump()
+                                        found = True
+                                        break
+                                if not found:
+                                    LOGGER.warning(f"No score found for {c_id} {t_name}")
+                        else:
+                            LOGGER.warning(f"No class scores returned for schedule {schedule.id}")
+                        
+                        # If successful, break the retry loop
+                        break
+                    else:
+                        LOGGER.warning(f"No score object returned for schedule {schedule.id}")
+                        # If no score but no exception, maybe we shouldn't retry? 
+                        # But let's retry just in case it was a glitch.
+                except Exception as e:
+                    LOGGER.error(f"Error analyzing schedule {schedule.id} (Attempt {attempt+1}): {e}")
+                    if attempt == 2:
+                        import traceback
+                        traceback.print_exc()
+                    else:
+                        await asyncio.sleep(1)
+                
             return schedule
 
-        # Convert Schedule to ClassTeacherTuple for agent
-        schedule_tuples = []
-        for course in schedule.courses:
-            # We assume courseId is like "CSE 2231"
-            schedule_tuples.append(ClassTeacherTuple(
-                class_id=course.courseId,
-                teacher=course.instructor
-            ))
-            
-        # Run agent
-        initial_state = {
-            "schedule": schedule_tuples,
-            "schedule_score": None,
-            "messages": [],
-            "constraints": str(request.preferences) if request.preferences else None,
-            "session": None 
-        }
-        
-        for attempt in range(3):
-            try:
-                LOGGER.info(f"Starting analysis for schedule {schedule.id} with {len(schedule_tuples)} courses (Attempt {attempt+1})")
-                result = await schedule_grading_graph.ainvoke(initial_state)
-                score: ScheduleScore = result.get("schedule_score")
-                
-                if score:
-                    LOGGER.info(f"Analysis complete for schedule {schedule.id}. Score: {score.adjusted_difficulty}")
-                    
-                    # Populate grading details dictionary
-                    schedule.gradingDetails = {
-                        "summary": score.summary,
-                        "adjusted_difficulty": score.adjusted_difficulty,
-                        "adjusted_assessment_intensity": score.adjusted_assessment_intensity,
-                        "adjusted_project_intensity": score.adjusted_project_intensity,
-                        "time_load": score.time_load,
-                        "adjusted_rigor": score.adjusted_rigor,
-                        "constraints": score.constraints,
-                        "confidence": score.confidence
-                    }
-                    
-                    # Populate top-level convenience fields
-                    schedule.difficultyScore = score.adjusted_difficulty
-                    schedule.weeklyHours = score.time_load
-                    schedule.creditHours = score.total_credit_hours
-                    
-                    # Update individual course scores
-                    if score.class_scores:
-                        LOGGER.info(f"Updating {len(score.class_scores)} course scores for schedule {schedule.id}")
-                        for course in schedule.courses:
-                            # Normalize course info to match agent's keys
-                            c_id = course.courseId.replace(" ", "").lower() if course.courseId else ""
-                            t_name = course.instructor.replace(" ", "").lower() if course.instructor else "unknown"
-                            
-                            # Find matching score
-                            found = False
-                            for key, class_score in score.class_scores.items():
-                                # print(f"Comparing {c_id}|{t_name} with {key.class_id}|{key.teacher}")
-                                if key.class_id == c_id and key.teacher == t_name:
-                                    course.difficultyRating = class_score.score
-                                    course.ratingDetails = class_score.model_dump()
-                                    found = True
-                                    break
-                            if not found:
-                                LOGGER.warning(f"No score found for {c_id} {t_name}")
-                    else:
-                        LOGGER.warning(f"No class scores returned for schedule {schedule.id}")
-                    
-                    # If successful, break the retry loop
-                    break
-                else:
-                    LOGGER.warning(f"No score object returned for schedule {schedule.id}")
-                    # If no score but no exception, maybe we shouldn't retry? 
-                    # But let's retry just in case it was a glitch.
-            except Exception as e:
-                LOGGER.error(f"Error analyzing schedule {schedule.id} (Attempt {attempt+1}): {e}")
-                if attempt == 2:
-                    import traceback
-                    traceback.print_exc()
-                else:
-                    await asyncio.sleep(1)
-            
-        return schedule
-
-    # Run analyses sequentially to avoid rate limits and timeouts
-    analyzed_schedules = []
-    for s in request.schedules:
-        analyzed = await analyze_one(s)
-        analyzed_schedules.append(analyzed)
+    # Run schedule analyses in parallel
+    tasks = [analyze_one(s) for s in request.schedules]
+    analyzed_schedules = await asyncio.gather(*tasks)
     
     return analyzed_schedules

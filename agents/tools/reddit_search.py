@@ -110,7 +110,11 @@ def search_reddit_threads(
 ) -> Dict[str, Any]:
     """Search r/OSU for threads mentioning the course and instructor and collect comments."""
 
-    query = f"\"{course_number}\" \"{teacher_name}\""
+    if teacher_name and teacher_name.lower() != "unknown":
+        query = f"\"{course_number}\" \"{teacher_name}\""
+    else:
+        query = f"\"{course_number}\""
+
     close_session = False
     client = session
     if client is None:
@@ -216,5 +220,6 @@ async def reddit_search_tool(
 
 
 if __name__ == "__main__":
-    result = search_reddit_threads("CSE 2221", "Kevin Laeufer", limit_threads=2, comment_limit=50)
+    # Test with a query that should return results
+    result = search_reddit_threads("CSE 2221", "unknown", limit_threads=2, comment_limit=50)
     print(result)
