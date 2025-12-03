@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db import User as UserORM, get_session
+from db import get_session
 from schemas import User, UserCreate, UserExists, UserUpdate
+from services import user_service
 
 users_router = APIRouter(prefix="/users", tags=["users"])
 
@@ -21,44 +21,24 @@ async def create_user(
 ):
     # If this is an OAuth signup (google_uid provided), check by google_uid first
     if user.google_uid:
-        existing_by_google = await session.scalar(select(UserORM).where(UserORM.google_uid == user.google_uid))
+        existing_by_google = await user_service.get_user_by_google_uid(user.google_uid, session)
         if existing_by_google:
             # Prefer returning existing user (200) so frontend can continue smoothly
             if response is not None:
                 response.status_code = status.HTTP_200_OK
             return User.model_validate(existing_by_google)
 
-    existing = await session.scalar(
-        select(UserORM).where(
-            or_(UserORM.username == user.username, UserORM.email == user.email)
-        )
-    )
-    if existing:
-        raise HTTPException(status_code=409, detail="User already exists")
-
-    db_user = UserORM(
-        username=user.username,
-        email=user.email,
-        google_uid=user.google_uid,
-        first_name=user.first_name,
-        last_name=user.last_name,
-        date_of_birth=user.date_of_birth,
-        preferences=user.preferences or {},
-    )
-    session.add(db_user)
-    await session.flush()
-    await session.commit()
-    await session.refresh(db_user)
+    db_user = await user_service.create_user(user, session)
     return User.model_validate(db_user)
 
 
 @users_router.get(
-    "/{userId}",
+    "/{google_uid}",
     response_model=User,
-    summary="Get a user by ID",
+    summary="Get a user by Google UID",
 )
-async def get_user(userId: int, session: AsyncSession = Depends(get_session)):
-    user = await session.get(UserORM, userId)
+async def get_user(google_uid: str, session: AsyncSession = Depends(get_session)):
+    user = await user_service.get_user_by_google_uid(google_uid, session)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     return User.model_validate(user)
@@ -67,14 +47,11 @@ async def get_user(userId: int, session: AsyncSession = Depends(get_session)):
 @users_router.get(
     "/google/{google_uid}",
     response_model=User,
-    summary="Get a user by Google UID",
+    summary="Get a user by Google UID (Legacy)",
 )
 async def get_user_by_google(google_uid: str, session: AsyncSession = Depends(get_session)):
     """Fetch a user by their Google UID. Returns 200 with user or 404 if not found."""
-    user = await session.scalar(select(UserORM).where(UserORM.google_uid == google_uid))
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    return User.model_validate(user)
+    return await get_user(google_uid, session)
 
 
 @users_router.get(
@@ -84,69 +61,29 @@ async def get_user_by_google(google_uid: str, session: AsyncSession = Depends(ge
 )
 async def user_exists_by_google(google_uid: str, session: AsyncSession = Depends(get_session)):
     """Return a flag indicating whether a user with the provided Google/Firebase UID exists."""
-    user = await session.scalar(select(UserORM).where(UserORM.google_uid == google_uid))
+    user = await user_service.get_user_by_google_uid(google_uid, session)
     if not user:
         return UserExists(exists=False, user=None)
     return UserExists(exists=True, user=User.model_validate(user))
 
 
 @users_router.put(
-    "/{userId}",
+    "/{google_uid}",
     response_model=User,
-    summary="Update a user by ID",
+    summary="Update a user by Google UID",
 )
 async def update_user(
-    userId: int, payload: UserUpdate, session: AsyncSession = Depends(get_session)
+    google_uid: str, payload: UserUpdate, session: AsyncSession = Depends(get_session)
 ):
-    user = await session.get(UserORM, userId)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    if payload.username and payload.username != user.username:
-        exists = await session.scalar(
-            select(UserORM).where(UserORM.username == payload.username)
-        )
-        if exists:
-            raise HTTPException(status_code=409, detail="Username already in use")
-        user.username = payload.username
-
-    if payload.email and payload.email != user.email:
-        exists = await session.scalar(select(UserORM).where(UserORM.email == payload.email))
-        if exists:
-            raise HTTPException(status_code=409, detail="Email already in use")
-        user.email = payload.email
-
-    if payload.google_uid and payload.google_uid != user.google_uid:
-        exists = await session.scalar(select(UserORM).where(UserORM.google_uid == payload.google_uid))
-        if exists:
-            raise HTTPException(status_code=409, detail="Google UID already in use")
-        user.google_uid = payload.google_uid
-
-    if payload.first_name is not None:
-        user.first_name = payload.first_name
-
-    if payload.last_name is not None:
-        user.last_name = payload.last_name
-
-    if payload.date_of_birth is not None:
-        user.date_of_birth = payload.date_of_birth
-
-    if payload.preferences is not None:
-        user.preferences = payload.preferences
-
-    await session.commit()
-    await session.refresh(user)
+    user = await user_service.update_user(google_uid, payload, session)
     return User.model_validate(user)
 
 
 @users_router.delete(
-    "/{userId}",
+    "/{google_uid}",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="Delete a user by ID",
+    summary="Delete a user by Google UID",
 )
-async def delete_user(userId: int, session: AsyncSession = Depends(get_session)):
-    user = await session.get(UserORM, userId)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    await session.delete(user)
-    await session.commit()
+async def delete_user(google_uid: str, session: AsyncSession = Depends(get_session)):
+    await user_service.delete_user(google_uid, session)
+

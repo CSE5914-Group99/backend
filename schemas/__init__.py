@@ -2,12 +2,12 @@
 
 from .course import CompareItem, CourseRating, CoursesCompareRequest, CoursesCompareResult
 from .schedule import (
-    ScheduleActivity,
-    ScheduleCourseDetail,
+    Course,
+    Event,
+    Schedule,
     ScheduleLoadRequest,
     ScheduleLoadResult,
     SchedulePayload,
-    ScheduleSaved,
 )
 from .user import LoginRequest, Token, User, UserCreate, UserExists, UserUpdate
 
@@ -16,12 +16,12 @@ __all__ = [
     "CourseRating",
     "CoursesCompareRequest",
     "CoursesCompareResult",
-    "ScheduleActivity",
-    "ScheduleCourseDetail",
+    "Course",
+    "Event",
+    "Schedule",
     "ScheduleLoadRequest",
     "ScheduleLoadResult",
     "SchedulePayload",
-    "ScheduleSaved",
     "LoginRequest",
     "Token",
     "User",

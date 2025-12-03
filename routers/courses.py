@@ -2,20 +2,19 @@ from __future__ import annotations
 
 from typing import List
 
-from fastapi import APIRouter, Depends, Body
-from langchain_core.messages import HumanMessage
+from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
 
-from agents.class_grading_agent import ClassScore, class_grading_graph
-from agents.schedule_grading_agent import ClassTeacherTuple, ScheduleScore, schedule_grading_graph
+from agents.class_grading_agent import ClassScore
+from agents.schedule_grading_agent import ClassTeacherTuple, ScheduleScore
 from agents.class_recommender_agent import (
     ScheduleClassWithTime,
     ModificationRequest,
     RecommenderOutput,
-    class_recommender_graph
 )
 from db.session import get_session
+from services import course_service
 
 courses_router = APIRouter(prefix="/courses", tags=["courses"])
 
@@ -27,26 +26,7 @@ async def ratings_courseId(
 ):
     # 1. Without teacher name: /courses/ratings/CSE2331
     # 2. With teacher name: /courses/ratings/CSE2331?teacher_name=John%20Doe
-    courseId = courseId.replace(" ", "").lower()
-    teacher_name_id_form = teacher_name.replace(" ", "").lower() if teacher_name else 'unknown'
-
-    # Include teacher name in the message if provided
-    if teacher_name and teacher_name != 'unknown':
-        message_content = f"Evaluate the class {courseId} taught by Professor {teacher_name}"
-    else:
-        message_content = f"Evaluate the class {courseId} (no specific instructor provided)"
-
-    test_messages = [HumanMessage(content=message_content)]
-    initial_state = {
-        "messages": test_messages,
-        "class_name": courseId,
-        "teacher_name": teacher_name_id_form,
-        "class_score": None,
-        "cached": False,
-        "session": session,  # Pass session for database caching
-    }
-    result = await class_grading_graph.ainvoke(initial_state)
-    return result["class_score"]
+    return await course_service.get_course_rating(courseId, teacher_name, session)
 
 # Request model for schedule-load endpoint
 class ScheduleLoadRequest(BaseModel):
@@ -63,19 +43,7 @@ async def schedule_load(
     Takes a list of class/teacher tuples and returns a comprehensive schedule analysis
     including individual class scores and overall schedule difficulty metrics.
     """
-    initial_state = {
-        "schedule": request.courses,
-        "schedule_score": None,
-        "messages": [],
-        "constraints": request.constraints,
-        "session": session
-    }
-
-    # Run the schedule grading graph
-    result = await schedule_grading_graph.ainvoke(initial_state)
-
-    # Return the complete schedule score object
-    return result["schedule_score"]
+    return await course_service.grade_schedule(request.courses, request.constraints, session)
 
 
 class ClassRecommendationRequest(BaseModel):
@@ -172,19 +140,9 @@ async def class_recommendations(
 
     Note: This endpoint can take 30-60 seconds due to multiple API calls.
     """
-    initial_state = {
-        "messages": [],
-        "schedule": request.schedule,
-        "schedule_score": request.schedule_score,
-        "modification_requests": request.modification_requests,
-        "alternatives_found": None,
-        "feasible_alternatives": None,
-        "graded_alternatives": {},
-        "recommender_output": None,
-        "session": session
-    }
-
-    # Run the class recommender graph
-    result = await class_recommender_graph.ainvoke(initial_state)
-
-    return result["recommender_output"]
+    return await course_service.get_class_recommendations(
+        request.schedule,
+        request.schedule_score,
+        request.modification_requests,
+        session
+    )

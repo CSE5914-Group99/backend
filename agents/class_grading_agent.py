@@ -15,15 +15,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .tools.internet_search import basic_tavily_search
 from .tools.osu_course_search import osu_course_search_tool
 from .tools.rate_my_professor import rate_my_professor_tool
+from .tools.reddit_search import reddit_search_tool
 #from .tools.osu_search import osu_search
-#from .tools.reddit_search import reddit_search
 #from .tools.coursicle_search import coursicle_search
 
 # Import CRUD functions for caching
 import sys
 from pathlib import Path
-sys.path.append(str(Path(__file__).parent.parent))
-from db.functions.courses import get_course, upsert_course
+# Add backend directory to path if not already there
+backend_path = str(Path(__file__).parent.parent)
+if backend_path not in sys.path:
+    sys.path.append(backend_path)
+# from db.functions.courses import upsert_course
 
 prompt = '''
 You are an expert Ohio State University class difficulty analyzer. Your job is to research and evaluate the difficulty of OSU classes to help students make informed course selection decisions.
@@ -152,38 +155,51 @@ class ClassGradingState(TypedDict):
     cached: bool
     session: AsyncSession | None  # Database session for caching
 
-# Initialize the ReAct agent with tools
-llm = ChatOpenAI(model="gpt-5-mini", temperature=1)
-tools = [
-    basic_tavily_search,
-    osu_course_search_tool,
-    rate_my_professor_tool,
-]  # , osu_search, reddit_search, coursicle_search
-agent = create_react_agent(
-    model=llm,
-    tools=tools,
-    prompt=prompt,
-    response_format=ClassScore
-)
+# Initialize the LLM
+llm = ChatOpenAI(model="gpt-4o", temperature=0)
+
+from sqlalchemy import select, func
+from db.models import Course
+import asyncio
+import re
+from langchain_core.messages import SystemMessage, HumanMessage
 
 # Node 1: Check cache for class info
 async def check_cache(state: ClassGradingState) -> ClassGradingState:
-    """Check if class information is already cached in the database"""
+    """Check if class information is already cached in the database (Course table)"""
     session = state.get("session")
-    class_name = state.get("class_name")
-    teacher_name = state.get("teacher_name")
+    class_name_input = state.get("class_name") 
+    teacher_name_input = state.get("teacher_name")
+
+    if not session:
+        return {"cached": False, "class_score": None}
+
+    # Normalize for query matching
+    class_name_norm = class_name_input.replace(" ", "").lower() if class_name_input else ""
+    teacher_name_norm = teacher_name_input.replace(" ", "").lower() if teacher_name_input else "unknown"
 
     try:
-        # Query database for cached rating
-        cached_course = await get_course(session, class_name, teacher_name)
+        # Query Course for any entry with matching course_id and teacher_name that has rating_details
+        # We need to normalize the DB values to match the input state
+        stmt = select(Course.rating_details).where(
+            func.replace(func.lower(Course.course_id), ' ', '') == class_name_norm,
+            func.replace(func.lower(Course.teacher_name), ' ', '') == teacher_name_norm,
+            Course.rating_details.is_not(None)
+        ).limit(1)
+        
+        result = await session.execute(stmt)
+        rating_details = result.scalar_one_or_none()
 
-        if cached_course:
+        if rating_details:
+            print(f"Cache HIT for {class_name_norm} / {teacher_name_norm}")
             # Found cached data - convert JSON to ClassScore
-            class_score = ClassScore(**cached_course.course_rating)
+            class_score = ClassScore(**rating_details)
             return {
                 "cached": True,
                 "class_score": class_score
             }
+        else:
+            print(f"Cache MISS for {class_name_norm} / {teacher_name_norm}")
     except Exception as e:
         # If cache lookup fails, continue to agent
         print(f"Cache lookup error: {e}")
@@ -194,42 +210,130 @@ async def check_cache(state: ClassGradingState) -> ClassGradingState:
         "class_score": None
     }
 
-# Node 2: Score class agent (calls tools)
-async def score_class_agent(state: ClassGradingState) -> ClassGradingState:
-    """Agent that calls various tools to score the class"""
-    messages = state["messages"]
-    response = await agent.ainvoke({"messages": messages}, debug=False)
-    return {
-        "messages": response["messages"],
-        "class_score": response['structured_response']
-    }
-
-# Node 3: Cache class score and relevant course info
-async def cache_class_score(state: ClassGradingState) -> ClassGradingState:
-    """Cache the class scoring information in the database"""
-    session = state.get("session")
-    class_name = state.get("class_name")
+# Node 2: Gather Info (Parallel)
+async def gather_info(state: ClassGradingState) -> ClassGradingState:
+    """Run all search tools in parallel to gather context"""
+    class_name = state["class_name"]
     teacher_name = state.get("teacher_name")
-    class_score = state.get("class_score")
+    
+    # Parse class name (e.g. "CSE 2331" -> "CSE", "2331")
+    subject = ""
+    number = ""
+    # Handle "CSE2331" or "CSE 2331"
+    match = re.match(r"([A-Za-z]+)\s*(\d+)", class_name)
+    if match:
+        subject = match.group(1)
+        number = match.group(2)
+    
+    tasks = []
+    
+    # 1. OSU Search
+    if subject and number:
+        tasks.append(osu_course_search_tool.ainvoke({
+            "subject": subject,
+            "course_number": number,
+            "term": "Summer 2025", 
+            "campus": "Columbus"
+        }))
+    else:
+        tasks.append(asyncio.sleep(0)) # No-op placeholder
 
-    try:
-        # Convert ClassScore to dict for JSON storage
-        course_rating = class_score.model_dump()
+    # 2. RMP
+    if teacher_name and teacher_name.lower() != "unknown":
+        tasks.append(rate_my_professor_tool.ainvoke({"query": teacher_name}))
+    else:
+        tasks.append(asyncio.sleep(0))
 
-        # Upsert to database (create or update)
-        await upsert_course(session, class_name, teacher_name, course_rating)
+    # 3. Reddit
+    if subject and number:
+        t_name = teacher_name if teacher_name and teacher_name.lower() != "unknown" else ""
+        tasks.append(reddit_search_tool.ainvoke({
+            "course_number": f"{subject} {number}",
+            "teacher_name": t_name
+        }))
+    else:
+        tasks.append(asyncio.sleep(0))
 
-        return {"cached": True}
-    except Exception as e:
-        print(f"Error caching course rating: {e}")
-        return {"cached": False}
+    # 4. Tavily
+    query = f"Ohio State University {class_name} difficulty"
+    if teacher_name and teacher_name.lower() != "unknown":
+        query += f" {teacher_name}"
+    tasks.append(basic_tavily_search.ainvoke({"query": query}))
+
+    # Execute all tasks concurrently
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    
+    # Helper to safely get result
+    def get_result(idx):
+        res = results[idx]
+        if isinstance(res, Exception):
+            return f"Error fetching data: {str(res)}"
+        return res
+    
+    # Unpack results (handling the placeholders)
+    osu_res = get_result(0) if (subject and number) else "Skipped (Invalid class format)"
+    rmp_res = get_result(1) if (teacher_name and teacher_name.lower() != "unknown") else "Skipped (No instructor provided)"
+    reddit_res = get_result(2) if (subject and number) else "Skipped"
+    tavily_res = get_result(3)
+    
+    context = f"""
+    ## Research Data Gathered
+    
+    **OSU Course Catalog (Sections & Availability)**:
+    {osu_res}
+    
+    **Rate My Professor**:
+    {rmp_res}
+    
+    **Reddit Discussions**:
+    {reddit_res}
+    
+    **General Web Search**:
+    {tavily_res}
+    """
+    
+    # Return as a HumanMessage so the LLM sees it as input
+    return {"messages": [HumanMessage(content=context)]}
+
+# Node 3: Generate Score
+async def generate_score(state: ClassGradingState) -> ClassGradingState:
+    """Analyze the gathered info and generate the score"""
+    # Combine the system prompt with the gathered research messages
+    messages = [SystemMessage(content=prompt)] + state["messages"]
+    
+    # Force structured output
+    structured_llm = llm.with_structured_output(ClassScore)
+    response = await structured_llm.ainvoke(messages)
+    
+    # Cache the result if session is available
+    # session = state.get("session")
+    # if session and response:
+    #     try:
+    #         class_name = state.get("class_name")
+    #         teacher_name = state.get("teacher_name")
+            
+    #         # Normalize for storage
+    #         c_id = class_name.replace(" ", "").lower() if class_name else ""
+    #         t_name = teacher_name.replace(" ", "").lower() if teacher_name else "unknown"
+            
+    #         print(f"Caching result for {c_id} / {t_name}")
+    #         await upsert_course(
+    #             session, 
+    #             c_id, 
+    #             t_name, 
+    #             response.model_dump()
+    #         )
+    #     except Exception as e:
+    #         print(f"Error caching result: {e}")
+
+    return {"class_score": response}
 
 # Conditional edge, Route based on cache hit/miss
-def route_after_cache_check(state: ClassGradingState) -> Literal["score_class_agent", "end"]:
-    """Route to agent if no cache, otherwise end"""
+def route_after_cache_check(state: ClassGradingState) -> Literal["gather_info", "end"]:
+    """Route to gather_info if no cache, otherwise end"""
     if state.get("cached") and state.get("class_score"):
         return "end"
-    return "score_class_agent"
+    return "gather_info"
 
 # Build the graph
 def create_class_grading_graph():
@@ -238,21 +342,23 @@ def create_class_grading_graph():
 
     # Add nodes
     graph.add_node("check_cache", check_cache)
-    graph.add_node("score_class_agent", score_class_agent)
-    graph.add_node("cache_class_score", cache_class_score)
+    graph.add_node("gather_info", gather_info)
+    graph.add_node("generate_score", generate_score)
 
     # Add edges
     graph.add_edge(START, "check_cache")
+    
     graph.add_conditional_edges(
         "check_cache",
         route_after_cache_check,
         {
-            "score_class_agent": "score_class_agent",
+            "gather_info": "gather_info",
             "end": END
         }
     )
-    graph.add_edge("score_class_agent", "cache_class_score")
-    graph.add_edge("cache_class_score", END)
+    
+    graph.add_edge("gather_info", "generate_score")
+    graph.add_edge("generate_score", END)
 
     return graph.compile()
 

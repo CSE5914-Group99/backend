@@ -9,35 +9,30 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field
 class User(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    id: Optional[int] = None
-    username: str
-    google_uid: Optional[str] = None
-    email: EmailStr
+    google_uid: str
+    email: Optional[EmailStr] = None
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     date_of_birth: Optional[date] = None
-    created_at: Optional[datetime] = None
-    preferences: dict[str, Any] = Field(default_factory=dict)
+    preferences: Optional[str] = None
 
 
 class UserCreate(BaseModel):
-    username: str
     email: EmailStr
-    google_uid: Optional[str] = None
+    google_uid: str
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     date_of_birth: Optional[date] = None
-    preferences: dict[str, Any] = Field(default_factory=dict)
+    preferences: Optional[str] = ""
 
 
 class UserUpdate(BaseModel):
-    username: Optional[str] = None
     email: Optional[EmailStr] = None
     google_uid: Optional[str] = None
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     date_of_birth: Optional[date] = None
-    preferences: Optional[dict[str, Any]] = None
+    preferences: Optional[str] = None
 
 
 class UserExists(BaseModel):
@@ -46,7 +41,7 @@ class UserExists(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    username_or_email: str
+    email: EmailStr
     password: Optional[str] = None
 
 

@@ -60,7 +60,7 @@ class ScheduleScore(BaseModel):
     adjusted_project_intensity: int = Field(0, ge=0, le=100, description="amount and difficulty of projects adjusted for credit hours and contraints")
     time_load: float = Field(ge=0, le=30, description="weekly time/effort vibe, how many credit hours it feels like for this entire schedule")
     adjusted_rigor: int = Field(0, ge=0, le=100, description="conceptual/technical depth")
-    contraints: str = Field(description="constraints given by user to agent to score schedule (ie. other commitments, time contraints, etc.)")
+    constraints: str = Field(description="constraints given by user to agent to score schedule (ie. other commitments, time contraints, etc.)")
     confidence: float = Field(0.6, ge=0.0, le=1.0, description="confidence about schedule score (more data online about each class = more sure about assigned score)")
 
 # Prompt for LLM schedule analysis
@@ -138,8 +138,18 @@ class ScheduleGradingState(TypedDict):
     constraints: str | None # User constraints for scoring
     session: AsyncSession | None  # Database session
 
+# Define input state for the score_class_agent_graph node
+class ScoreClassInputState(TypedDict):
+    messages: Annotated[list, add_messages]
+    class_name: str
+    teacher_name: str | None
+    class_score: ClassScore | None
+    cached: bool
+    session: AsyncSession | None
+    class_teacher_tuple: ClassTeacherTuple
+
 # Node 3: Score individual class using the class grading graph
-async def score_class_agent_graph(state: ClassGradingState) -> dict:
+async def score_class_agent_graph(state: ScoreClassInputState) -> dict:
     """
     Execute the class grading graph for a single class.
     This node will be called in parallel for each class in the schedule.
@@ -147,9 +157,18 @@ async def score_class_agent_graph(state: ClassGradingState) -> dict:
     # Create a new session for this parallel operation to avoid concurrent session errors
     session_factory = get_session_factory()
     async with session_factory() as session:
-        # Update state with new session
-        state_with_session = {**state, "session": session}
-        result = await class_grading_graph.ainvoke(state_with_session)
+        # Create a clean input for the subgraph (ClassGradingState)
+        # We must NOT pass class_teacher_tuple to the subgraph as it doesn't expect it
+        subgraph_input = {
+            "messages": state["messages"],
+            "class_name": state["class_name"],
+            "teacher_name": state["teacher_name"],
+            "class_score": state["class_score"],
+            "cached": state["cached"],
+            "session": session
+        }
+        
+        result = await class_grading_graph.ainvoke(subgraph_input)
 
     class_teacher_tuple = state["class_teacher_tuple"]
     class_score = result["class_score"]
@@ -167,7 +186,7 @@ async def score_class_agent_graph(state: ClassGradingState) -> dict:
         adjusted_project_intensity=0,  # Will be calculated in summarize
         time_load=0.0,  # Will be calculated in summarize
         adjusted_rigor=0,  # Will be calculated in summarize
-        contraints="",  # Will be set in summarize
+        constraints="",  # Will be set in summarize
         confidence=0.0  # Will be calculated in summarize
     )
 
@@ -177,7 +196,7 @@ async def score_class_agent_graph(state: ClassGradingState) -> dict:
     }
 
 # Initialize ReAct agent for schedule analysis
-llm = ChatOpenAI(model="gpt-5-mini", temperature=1)
+llm = ChatOpenAI(model="gpt-4o", temperature=0)
 tools = [basic_tavily_search]
 schedule_analysis_agent = create_react_agent(
     model=llm,
@@ -261,7 +280,7 @@ Now provide your holistic analysis of this schedule with adjusted difficulty sco
         adjusted_project_intensity=analysis.adjusted_project_intensity,
         time_load=analysis.time_load,
         adjusted_rigor=analysis.adjusted_rigor,
-        contraints=state.get("constraints", ""),
+        constraints=state.get("constraints") or "",
         confidence=analysis.confidence
     )
 
@@ -295,7 +314,7 @@ def merge_schedule_scores(left: ScheduleScore | None, right: ScheduleScore | Non
             adjusted_project_intensity=right.adjusted_project_intensity,
             time_load=right.time_load,
             adjusted_rigor=right.adjusted_rigor,
-            contraints=right.contraints,
+            constraints=right.constraints,
             confidence=right.confidence
         )
     elif left.summary and left.summary != "":
@@ -310,7 +329,7 @@ def merge_schedule_scores(left: ScheduleScore | None, right: ScheduleScore | Non
             adjusted_project_intensity=left.adjusted_project_intensity,
             time_load=left.time_load,
             adjusted_rigor=left.adjusted_rigor,
-            contraints=left.contraints,
+            constraints=left.constraints,
             confidence=left.confidence
         )
     else:
@@ -326,7 +345,7 @@ def merge_schedule_scores(left: ScheduleScore | None, right: ScheduleScore | Non
             adjusted_project_intensity=0,  # Will be calculated in summarize_schedule
             time_load=0.0,  # Will be calculated in summarize_schedule
             adjusted_rigor=0,  # Will be calculated in summarize_schedule
-            contraints="",  # Will be set in summarize_schedule
+            constraints="",  # Will be set in summarize_schedule
             confidence=0.0  # Will be calculated in summarize_schedule
         )
 
