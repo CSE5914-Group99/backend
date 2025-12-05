@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from services.osu_course_search import fetch_osu_course_sections, CourseSection
 
 from agents.class_grading_agent import class_grading_graph
+from agents.schedule_grading_agent import create_class_key
 from langchain_core.messages import HumanMessage
 from db.session import get_session_factory
 
@@ -529,18 +530,16 @@ async def analyze_generated_schedules(request: AnalyzeSchedulesRequest) -> List[
                                 # Normalize course info to match agent's keys
                                 c_id = course.courseId.replace(" ", "").lower() if course.courseId else ""
                                 t_name = course.instructor.replace(" ", "").lower() if course.instructor else "unknown"
-                                
-                                # Find matching score
-                                found = False
-                                for key, class_score in score.class_scores.items():
-                                    # print(f"Comparing {c_id}|{t_name} with {key.class_id}|{key.teacher}")
-                                    if key.class_id == c_id and key.teacher == t_name:
-                                        course.difficultyRating = class_score.score
-                                        course.ratingDetails = class_score.model_dump()
-                                        found = True
-                                        break
-                                if not found:
-                                    LOGGER.warning(f"No score found for {c_id} {t_name}")
+
+                                # Create string key and lookup directly (O(1) instead of O(n))
+                                class_key = create_class_key(c_id, t_name)
+                                class_score = score.class_scores.get(class_key)
+
+                                if class_score:
+                                    course.difficultyRating = class_score.score
+                                    course.ratingDetails = class_score.model_dump()
+                                else:
+                                    LOGGER.warning(f"No score found for {class_key}")
                         else:
                             LOGGER.warning(f"No class scores returned for schedule {schedule.id}")
                         

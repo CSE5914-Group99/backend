@@ -1,7 +1,5 @@
 from .course_search import course_search_router
 from .courses import courses_router
-from .rate_my_professor import rate_my_professor_router
-from .reddit import reddit_router
 from .schedules import schedule_router
 from .users import users_router
 from .generate_schedule import router as generate_schedule_router
