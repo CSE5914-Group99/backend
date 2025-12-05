@@ -6,8 +6,7 @@ from typing import Optional, TypedDict, Annotated
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from langgraph.types import Send
-from langgraph.prebuilt import create_react_agent
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,9 +15,6 @@ from .class_grading_agent import ClassScore, ClassGradingState, class_grading_gr
 
 # Import session factory for creating new sessions in parallel operations
 from db.session import get_session_factory
-
-# Import tools
-from .tools.internet_search import basic_tavily_search
 
 
 # Pydantic model for class-teacher tuple
@@ -195,19 +191,12 @@ async def score_class_agent_graph(state: ScoreClassInputState) -> dict:
         "schedule_score": partial_schedule_score
     }
 
-# Initialize ReAct agent for schedule analysis
+# Initialize LLM for schedule analysis
 llm = ChatOpenAI(model="gpt-4o", temperature=0)
-tools = [basic_tavily_search]
-schedule_analysis_agent = create_react_agent(
-    model=llm,
-    tools=tools,
-    prompt=schedule_analysis_prompt,
-    response_format=ScheduleAnalysis
-)
 
-# Node 4: Summarize schedule and create ScheduleScore object using ReAct agent
+# Node 4: Summarize schedule and create ScheduleScore object using LLM with structured output
 async def summarize_schedule(state: ScheduleGradingState) -> ScheduleGradingState:
-    """Use ReAct agent to generate nuanced schedule analysis with adjusted difficulty scores"""
+    """Use LLM with structured output to generate nuanced schedule analysis with adjusted difficulty scores"""
     # Get the schedule_score which has been built up with class_scores from parallel executions
     current_schedule_score = state.get("schedule_score")
 
@@ -243,7 +232,7 @@ async def summarize_schedule(state: ScheduleGradingState) -> ScheduleGradingStat
         )
         class_summaries.append(class_summary)
 
-    # Prepare prompt for ReAct agent
+    # Prepare content for LLM
     classes_info = "\n\n".join(class_summaries)
 
     # Get user constraints from state
@@ -259,17 +248,20 @@ async def summarize_schedule(state: ScheduleGradingState) -> ScheduleGradingStat
 
 {classes_info}
 
-Now provide your holistic analysis of this schedule with adjusted difficulty scores. You can use search tools if you need additional context about course interactions or workload patterns.
+Now provide your holistic analysis of this schedule with adjusted difficulty scores.
 """
 
-    # Create message for the agent
-    message = HumanMessage(content=analysis_request)
+    # Combine system prompt with the analysis request
+    messages = [
+        SystemMessage(content=schedule_analysis_prompt),
+        HumanMessage(content=analysis_request)
+    ]
 
-    # Get analysis from ReAct agent
-    agent_response = await schedule_analysis_agent.ainvoke({"messages": [message]}, debug=False)
-    analysis: ScheduleAnalysis = agent_response['structured_response']
+    # Use structured output to get the analysis
+    structured_llm = llm.with_structured_output(ScheduleAnalysis)
+    analysis: ScheduleAnalysis = await structured_llm.ainvoke(messages)
 
-    # Create final ScheduleScore object with agent-generated metrics
+    # Create final ScheduleScore object with LLM-generated metrics
     schedule_score = ScheduleScore(
         class_scores=class_scores_dict,
         total_credit_hours=total_credit_hours,
@@ -285,8 +277,7 @@ Now provide your holistic analysis of this schedule with adjusted difficulty sco
     )
 
     return {
-        "schedule_score": schedule_score,
-        "messages": agent_response["messages"]
+        "schedule_score": schedule_score
     }
 
 # Reducer function to merge schedule scores from parallel executions
@@ -437,35 +428,39 @@ schedule_grading_graph = create_schedule_grading_graph()
 
 if __name__ == "__main__":
     # run with python -m agents.schedule_grading_agent
-
-    # Test the graph with a sample schedule
-    test_schedule = [
-        ClassTeacherTuple(class_id="CSE2331", teacher=None),
-        ClassTeacherTuple(class_id="PHYSICS 1250", teacher="John Doe")
-    ]
-
-    initial_state = {
-        "schedule": test_schedule,
-        "schedule_score": None,
-        "messages": [],
-        "session": None  # No session for local testing
-    }
-
-    print(f"Scoring schedule: {test_schedule}")
-    print("This will score all classes in parallel using the Send API...\n")
-
-    # Run the graph
-    result = schedule_grading_graph.invoke(initial_state, debug=False)
-
-    # Print results
+    import asyncio
     import json
-    print("\n=== Schedule Scoring Results ===\n")
 
-    if result.get("schedule_score"):
-        schedule_score = result["schedule_score"]
-        print("Overall Schedule Summary:")
-        print(json.dumps(schedule_score.model_dump(), indent=2))
-    else:
-        print("No schedule score generated")
+    async def main():
+        # Test the graph with a sample schedule
+        test_schedule = [
+            ClassTeacherTuple(class_id="CSE2331", teacher=None),
+            ClassTeacherTuple(class_id="PHYSICS 1250", teacher="John Doe")
+        ]
 
-    print("\n" + "=" * 80)
+        initial_state = {
+            "schedule": test_schedule,
+            "schedule_score": None,
+            "messages": [],
+            "session": None  # No session for local testing
+        }
+
+        print(f"Scoring schedule: {test_schedule}")
+        print("This will score all classes in parallel using the Send API...\n")
+
+        # Run the graph
+        result = await schedule_grading_graph.ainvoke(initial_state, debug=False)
+
+        # Print results
+        print("\n=== Schedule Scoring Results ===\n")
+
+        if result.get("schedule_score"):
+            schedule_score = result["schedule_score"]
+            print("Overall Schedule Summary:")
+            print(json.dumps(schedule_score.model_dump(), indent=2))
+        else:
+            print("No schedule score generated")
+
+        print("\n" + "=" * 80)
+
+    asyncio.run(main())
