@@ -26,7 +26,8 @@ from pathlib import Path
 backend_path = str(Path(__file__).parent.parent)
 if backend_path not in sys.path:
     sys.path.append(backend_path)
-# from db.functions.courses import upsert_course
+from services.schedule_service import upsert_courses
+from schemas.schedule import Course as CourseSchema
 
 prompt = '''
 You are an expert Ohio State University class difficulty analyzer. Your job is to research and evaluate the difficulty of OSU classes to help students make informed course selection decisions.
@@ -306,25 +307,27 @@ async def generate_score(state: ClassGradingState) -> ClassGradingState:
     response = await structured_llm.ainvoke(messages)
     
     # Cache the result if session is available
-    # session = state.get("session")
-    # if session and response:
-    #     try:
-    #         class_name = state.get("class_name")
-    #         teacher_name = state.get("teacher_name")
+    session = state.get("session")
+    if session and response:
+        try:
+            class_name = state.get("class_name")
+            teacher_name = state.get("teacher_name")
             
-    #         # Normalize for storage
-    #         c_id = class_name.replace(" ", "").lower() if class_name else ""
-    #         t_name = teacher_name.replace(" ", "").lower() if teacher_name else "unknown"
+            # Use schedule service upsert to maintain consistency with other routes
+            # We need to handle the case where teacher_name is 'unknown' or None
+            t_name = teacher_name if teacher_name and teacher_name.lower() != 'unknown' else None
             
-    #         print(f"Caching result for {c_id} / {t_name}")
-    #         await upsert_course(
-    #             session, 
-    #             c_id, 
-    #             t_name, 
-    #             response.model_dump()
-    #         )
-    #     except Exception as e:
-    #         print(f"Error caching result: {e}")
+            course_data = CourseSchema(
+                courseId=class_name,
+                instructor=t_name,
+                rating_details=response.model_dump()
+            )
+            
+            print(f"Caching result for {class_name} / {teacher_name}")
+            await upsert_courses([course_data], session)
+            
+        except Exception as e:
+            print(f"Error caching result: {e}")
 
     return {"class_score": response}
 
