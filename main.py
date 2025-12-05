@@ -6,8 +6,6 @@ import uvicorn
 from routers import (
     course_search_router,
     courses_router,
-    rate_my_professor_router,
-    reddit_router,
     schedule_router,
     users_router,
     generate_schedule_router,
@@ -51,8 +49,6 @@ app.include_router(courses_router)
 app.include_router(schedule_router)
 app.include_router(generate_schedule_router)
 app.include_router(course_search_router)
-app.include_router(rate_my_professor_router)
-app.include_router(reddit_router)
 
 
 if __name__ == "__main__":
