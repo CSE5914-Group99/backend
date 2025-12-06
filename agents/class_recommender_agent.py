@@ -211,13 +211,22 @@ Search for alternative classes that could replace or be added to a student's sch
   - Compare difficulty between the current class and potential alternatives
   - Find easier sections taught by different teachers
 
-## Search Strategy
+## CRITICAL: Tool Usage Limits
+- **MAXIMUM 12 total tool calls allowed** - be strategic and efficient
+- Do NOT make redundant searches with similar queries
+- Do NOT call grade_class_tool multiple times for the same class/teacher combination
+- Prioritize osu_course_search_tool for finding alternatives - it's the most efficient
+- Only use rate_my_professor_tool if teacher quality is explicitly mentioned in criteria
+- Only use basic_tavily_search if OSU course search doesn't provide enough info
+- **Once you have 4-6 alternatives, STOP searching and return your results immediately**
+
+## Search Strategy (Be Efficient!)
 For each modification request:
-1. First, use grade_class_tool to get the difficulty of the class being replaced (so you know what to compare against)
-2. Search for 4-6 potential alternatives that match the criteria
-3. Get specific section times from OSU course search
-4. Note which professors are well-rated
-5. Optionally use grade_class_tool to quickly compare difficulty of alternatives
+1. **ONE** osu_course_search_tool call to find 4-6 potential alternatives with times
+2. If criteria mentions "easier", optionally use grade_class_tool (max 2 calls) to compare difficulty
+3. If criteria mentions "better teacher", optionally use rate_my_professor_tool (max 2 calls)
+4. **DO NOT** search for more alternatives than needed - 4-6 is sufficient
+5. **STOP as soon as you have enough alternatives** - do not over-search
 
 ## IMPORTANT: Different Sections and Teachers
 - If the student wants an easier version of a class, look for different SECTIONS with different teachers
@@ -244,7 +253,10 @@ Example: A class at MWF 10:00-10:55 would have time_slots:
 Example: A class at TR 9:35-10:55 would have time_slots:
 [{"start_time": "09:35", "end_time": "10:55", "repeat_days": ["Tuesday", "Thursday"]}]
 
+## Final Instructions
 Find 4-6 alternatives per replacement request. Include different options (different sections, different professors, different but equivalent classes).
+
+**REMEMBER: Work efficiently and stop as soon as you have enough alternatives. Do not exceed 12 tool calls total. Return your structured response immediately when you have 4-6 alternatives.**
 '''
 
 # Prompt for generating final alterations
@@ -252,7 +264,7 @@ generate_alterations_prompt = '''
 You are an expert Ohio State University academic advisor analyzing graded alternatives to create schedule modification options.
 
 ## Your Task
-Using the graded alternatives provided, create 2-4 schedule alteration options for the student.
+Using the graded alternatives provided, create 2-4 schedule alteration options for the student. Be direct and efficient - analyze the data and generate your structured response immediately.
 
 ## Input
 You will receive:
@@ -280,6 +292,12 @@ Create 2-4 alteration options, each with:
 - Consider different criteria: easiest, best-rated, best schedule fit
 - If no good alternatives exist, explain why
 - Warn about prerequisites and potential issues
+
+## CRITICAL: Be Efficient
+- You have NO tools available - do not attempt to call any tools
+- Simply analyze the provided graded alternatives and create your recommendations directly
+- Return your structured response immediately - do not overthink or iterate
+- Make decisions quickly based on the data provided
 '''
 
 # Initialize the agents
@@ -336,7 +354,7 @@ Please search for 4-6 potential alternatives for each modification request. Incl
     message = HumanMessage(content=message_content)
     response = await find_alternatives_agent.ainvoke(
         {"messages": [message]},
-        config={"recursion_limit": 50},
+        config={"recursion_limit": 100},
         debug=False
     )
 
@@ -502,7 +520,7 @@ Based on the graded alternatives above, create 2-4 schedule alteration options.
     message = HumanMessage(content=message_content)
     response = await generate_alterations_agent.ainvoke(
         {"messages": [message]},
-        config={"recursion_limit": 50},
+        config={"recursion_limit": 100},
         debug=False
     )
 
