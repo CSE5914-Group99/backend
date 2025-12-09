@@ -20,7 +20,7 @@ async def generate_schedule_endpoint(request: GenerateScheduleRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/analyze", response_model=List[Schedule])
+@router.post("/analyze", response_model=List[Schedule], response_model_by_alias=False)
 async def analyze_schedules_endpoint(request: AnalyzeSchedulesRequest):
     """
     Analyze a list of schedules using the AI agent to calculate difficulty, time load, etc.
