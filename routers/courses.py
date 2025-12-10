@@ -63,27 +63,74 @@ async def class_recommendations(
     It searches for options, filters out time conflicts, grades each alternative,
     and returns 2-4 schedule modification options.
 
-    Request body:
+    Request body structure:
     {
       "schedule": [
         {
           "class_id": "CSE 2331",
-          "teacher": "Smith",
+          "teacher": "Smith",  // Optional: can be null
           "time_slots": [
             {
-              "start_time": "10:00",
+              "start_time": "10:00",  // HH:mm format
               "end_time": "10:55",
               "repeat_days": ["Monday", "Wednesday", "Friday"]
             }
           ]
         }
       ],
-      "schedule_score": { ... },
+      "schedule_score": {
+        "class_scores": [
+          {
+            "class_id": "cse2331",  // Normalized: lowercase, no spaces
+            "teacher": "smith",  // Normalized: lowercase, no spaces, or "unknown"
+            "score": 75,  // 1-100
+            "ch": 3,
+            "summary": "Challenging data structures course",
+            "time_load": 6.5,  // 0-8 hours/week
+            "rigor": 70,  // 0-100
+            "assessment_intensity": 65,  // 0-100
+            "project_intensity": 80,  // 0-100
+            "pace": 70,  // 0-100
+            "pre_reqs": ["CSE 2221"],
+            "co_reqs": [],
+            "tags": ["programming", "data-structures"],
+            "evidence_snippets": ["Student review quotes..."],
+            "confidence": 0.85  // 0.0-1.0
+          },
+          {
+            "class_id": "math2568",
+            "teacher": "unknown",
+            "score": 60,
+            "ch": 3,
+            "summary": "Linear algebra course",
+            "time_load": 5.0,
+            "rigor": 65,
+            "assessment_intensity": 60,
+            "project_intensity": 30,
+            "pace": 55,
+            "pre_reqs": ["MATH 1151"],
+            "co_reqs": [],
+            "tags": ["math", "theory"],
+            "evidence_snippets": ["Conceptually challenging"],
+            "confidence": 0.75
+          }
+        ],
+        "total_credit_hours": 6,
+        "num_classes": 2,
+        "summary": "Moderately challenging schedule",
+        "adjusted_difficulty": 68,  // 1-100
+        "adjusted_assessment_intensity": 62,  // 0-100
+        "adjusted_project_intensity": 55,  // 0-100
+        "time_load": 11.5,  // 0-30 hours/week for entire schedule
+        "adjusted_rigor": 67,  // 0-100
+        "constraints": "Working 15 hours per week",
+        "confidence": 0.8  // 0.0-1.0
+      },
       "modification_requests": [
         {
-          "class_to_replace": "CSE 2331",
-          "reason": "Too difficult",
-          "criteria": "Easier CSE class, morning times"
+          "class_to_replace": "CSE 2331",  // Optional: null if adding a new class
+          "reason": "Too difficult for my current workload",
+          "criteria": "Easier CSE class, morning times preferred"
         }
       ]
     }

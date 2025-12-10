@@ -8,7 +8,6 @@ from pydantic import BaseModel
 from services.osu_course_search import fetch_osu_course_sections, CourseSection
 
 from agents.class_grading_agent import class_grading_graph
-from agents.schedule_grading_agent import create_class_key
 from langchain_core.messages import HumanMessage
 from db.session import get_session_factory
 
@@ -527,19 +526,26 @@ async def analyze_generated_schedules(request: AnalyzeSchedulesRequest) -> List[
                         if score.class_scores:
                             LOGGER.info(f"Updating {len(score.class_scores)} course scores for schedule {schedule.id}")
                             for course in schedule.courses:
-                                # Normalize course info to match agent's keys
+                                # Normalize course info to match agent's format
                                 c_id = course.courseId.replace(" ", "").lower() if course.courseId else ""
                                 t_name = course.instructor.replace(" ", "").lower() if course.instructor else "unknown"
 
-                                # Create string key and lookup directly (O(1) instead of O(n))
-                                class_key = create_class_key(c_id, t_name)
-                                class_score = score.class_scores.get(class_key)
+                                # Find matching class score in the list
+                                class_score = next(
+                                    (cs for cs in score.class_scores
+                                     if cs.class_id == c_id and cs.teacher == t_name),
+                                    None
+                                )
 
                                 if class_score:
                                     course.difficultyRating = class_score.score
-                                    course.ratingDetails = class_score.model_dump()
+                                    # Exclude class_id and teacher when dumping to ratingDetails
+                                    rating_dict = class_score.model_dump()
+                                    rating_dict.pop('class_id', None)
+                                    rating_dict.pop('teacher', None)
+                                    course.ratingDetails = rating_dict
                                 else:
-                                    LOGGER.warning(f"No score found for {class_key}")
+                                    LOGGER.warning(f"No score found for {c_id}|{t_name}")
                         else:
                             LOGGER.warning(f"No class scores returned for schedule {schedule.id}")
                         
