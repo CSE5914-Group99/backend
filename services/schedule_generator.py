@@ -230,6 +230,18 @@ async def generate_schedules(
         # Parse sections
         parsed_sections = []
         for sec in res.sections:
+            # Filter out sections with TBD/TBA times or missing times
+            if not sec.startTime or not sec.endTime:
+                continue
+                
+            s_time = sec.startTime.upper()
+            e_time = sec.endTime.upper()
+            
+            if "TBD" in s_time or "TBA" in s_time or "ARRANGED" in s_time:
+                continue
+            if "TBD" in e_time or "TBA" in e_time or "ARRANGED" in e_time:
+                continue
+
             # Parse times
             # New CourseSection already has parsed times
             slots = []
@@ -242,6 +254,10 @@ async def generate_schedules(
                         start_minutes=start_min,
                         end_minutes=end_min
                     ))
+            
+            # If no valid slots were parsed (e.g. no days listed), skip this section
+            if not slots:
+                continue
             
             parsed_sections.append(ParsedSection(
                 course_subject=res.subject,
