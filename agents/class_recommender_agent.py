@@ -606,7 +606,7 @@ if __name__ == "__main__":
 
     # Create a mock ScheduleScore
     test_schedule_score = ScheduleScore(
-        class_scores={},
+        class_scores=[],
         total_credit_hours=12,
         num_classes=3,
         summary="A moderately challenging STEM-focused schedule.",
